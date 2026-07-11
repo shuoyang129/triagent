@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+from enum import StrEnum
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class RiskLevel(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    ROBOT_SAFETY = "robot-safety"
+
+
+class TaskState(StrEnum):
+    SPEC = "SPEC"
+    IMPLEMENT = "IMPLEMENT"
+    VERIFY = "VERIFY"
+    REVIEW = "REVIEW"
+    REPAIR = "REPAIR"
+    APPROVAL = "APPROVAL"
+    WAITING_FOR_USER = "WAITING_FOR_USER"
+    WAITING_FOR_VISUAL_APPROVAL = "WAITING_FOR_VISUAL_APPROVAL"
+    WAITING_FOR_GUI = "WAITING_FOR_GUI"
+    PAUSED_BUDGET = "PAUSED_BUDGET"
+    FAILED_RECOVERABLE = "FAILED_RECOVERABLE"
+    FAILED_FINAL = "FAILED_FINAL"
+
+
+class ReviewSeverity(StrEnum):
+    BLOCKER = "BLOCKER"
+    MAJOR = "MAJOR"
+    MINOR = "MINOR"
+    NOTE = "NOTE"
+
+
+class Budget(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    max_agent_calls: int = Field(default=20, ge=0)
+    max_minutes: int = Field(default=60, ge=0)
+    max_usd: float = Field(default=0.0, ge=0)
+
+
+class TaskSpec(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    goal: str = Field(min_length=1)
+    scope: list[str] = Field(min_length=1)
+    acceptance: list[str] = Field(min_length=1)
+    risk: RiskLevel = RiskLevel.LOW
+    visual_check: Literal["required", "optional", "none"] = "none"
+    forbidden: list[str] = Field(default_factory=list)
+    budget: Budget = Field(default_factory=Budget)
+
+    @model_validator(mode="after")
+    def enforce_robot_visual_check(self) -> TaskSpec:
+        if self.risk is RiskLevel.ROBOT_SAFETY and self.visual_check != "required":
+            return self.model_copy(update={"visual_check": "required"})
+        return self

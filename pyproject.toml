@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "triagent"
+version = "0.1.0"
+description = "Cross-platform orchestration for Codex, Cursor, and Antigravity"
+requires-python = ">=3.12"
+dependencies = [
+  "pydantic>=2.10,<3",
+  "typer>=0.15,<1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=9,<10"]
+
+[project.scripts]
+triagent = "triagent.cli:app"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+  "live_cli: requires authenticated vendor CLIs",
+  "onsite: requires LAN Windows/DGX hardware",
+]
