@@ -57,5 +57,5 @@ class TaskSpec(BaseModel):
     @model_validator(mode="after")
     def enforce_robot_visual_check(self) -> TaskSpec:
         if self.risk is RiskLevel.ROBOT_SAFETY and self.visual_check != "required":
-            return self.model_copy(update={"visual_check": "required"})
+            object.__setattr__(self, "visual_check", "required")
         return self
