@@ -59,14 +59,66 @@ def filesystem_probe(
     displayed_path = prompt_path(target) if prompt_path else str(target)
     contract = json.dumps({"path": displayed_path, "nonce": nonce}, separators=(",", ":"))
     prompt = f"Write the exact nonce to the exact file path using a file tool. TRIAGENT_SENTINEL={contract}"
+    success = False
     try:
         target.unlink(missing_ok=True)
         result = runner.run([*argv_prefix, prompt], probe_dir, 30, env)
-        return not result.timed_out and result.returncode == 0 and target.read_text(encoding="utf-8") == nonce
+        success = not result.timed_out and result.returncode == 0 and target.read_text(encoding="utf-8") == nonce
     except (OSError, UnicodeError):
-        return False
-    finally:
+        success = False
+    try:
         target.unlink(missing_ok=True)
+    except OSError:
+        return False
+    return success
+
+
+def invoke_codex_jsonl(
+    runner: ProcessRunner,
+    argv: Sequence[str],
+    cwd: Path,
+    timeout: float,
+    env: Mapping[str, str] | None = None,
+    secret_values: Sequence[str] = (),
+) -> AgentResult:
+    try:
+        process = runner.run(argv, cwd, timeout, env or {})
+    except (FileNotFoundError, OSError):
+        return AgentResult(status=AgentStatus.UNAVAILABLE, summary="CLI executable is unavailable")
+    if process.timed_out:
+        return AgentResult(status=AgentStatus.TIMED_OUT, summary="CLI execution timed out")
+    if process.returncode != 0:
+        diagnostic = f"{process.stdout}\n{process.stderr}".lower()
+        auth_code = re.search(r"(?<!\d)(?:401|403)(?!\d)", diagnostic) is not None
+        if auth_code or any(marker in diagnostic for marker in _AUTH_FAILURES):
+            return AgentResult(status=AgentStatus.UNAVAILABLE, summary="CLI authentication or configuration is unavailable")
+        return AgentResult(status=AgentStatus.FAILED, summary="CLI execution failed")
+    messages: list[str] = []
+    try:
+        for line in process.stdout.splitlines():
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            if not isinstance(event, dict):
+                raise ValueError
+            item = event.get("item")
+            if event.get("type") == "item.completed" and isinstance(item, dict) and item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+                messages.append(item["text"])
+                continue
+            if event.get("type") == "agent_message" and isinstance(event.get("message"), str):
+                messages.append(event["message"])
+                continue
+            if event.get("type") == "message" and event.get("role") == "assistant" and isinstance(event.get("content"), list):
+                text = "".join(part.get("text", "") for part in event["content"] if isinstance(part, dict) and part.get("type") in {"output_text", "text"})
+                if text:
+                    messages.append(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="CLI returned malformed structured output")
+    if not messages:
+        return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="CLI returned no final agent message")
+    message = sanitize(messages[-1], secret_values)
+    assert isinstance(message, str)
+    return AgentResult(status=AgentStatus.SUCCEEDED, summary=message, data={"message": message})
 
 
 def invoke_json(

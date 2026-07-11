@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from triagent.adapters._cli import invoke_json, probe, read_prompt, runtime
+from triagent.adapters._cli import invoke_codex_jsonl, probe, read_prompt, runtime
 from triagent.adapters.base import AgentAdapter, AgentCapabilities, AgentRequest, AgentResult
 from triagent.adapters.process import ProcessRunner
 
@@ -25,4 +25,4 @@ class CodexAdapter(AgentAdapter):
             return error
         assert prompt is not None
         argv = ["codex.exe", "exec", "--sandbox", "read-only", "--json", prompt]
-        return invoke_json(self._runner, argv, request.workdir, request.timeout_seconds, self._env, self._secrets)
+        return invoke_codex_jsonl(self._runner, argv, request.workdir, request.timeout_seconds, self._env, self._secrets)

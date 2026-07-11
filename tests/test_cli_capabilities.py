@@ -44,6 +44,20 @@ class SentinelRunner(FakeRunner):
         return result
 
 
+class DirectorySentinelRunner(FakeRunner):
+    def run(self, argv, cwd, timeout, env_allowlist):
+        result = super().run(argv, cwd, timeout, env_allowlist)
+        match = re.search(r'TRIAGENT_SENTINEL=(\{.*\})', argv[-1])
+        if match:
+            contract = json.loads(match.group(1))
+            path = contract["path"]
+            wsl = re.fullmatch(r"/mnt/([a-zA-Z])(/.*)", path)
+            if wsl:
+                path = f"{wsl.group(1).upper()}:{wsl.group(2)}"
+            Path(path).mkdir()
+        return result
+
+
 def completed(stdout: str = "", returncode: int = 0, stderr: str = "") -> ProcessResult:
     return ProcessResult(returncode, stdout, stderr, False)
 
@@ -101,7 +115,7 @@ def test_auth_and_configuration_failures_are_unavailable(agent_request: AgentReq
 def test_result_recursively_redacts_secret_values_and_keys(agent_request: AgentRequest) -> None:
     secret = "sk-review-secret"
     payload = {"summary": f"used {secret}", "nested": {"api_key": secret, "note": secret}, "items": [{"accessToken": secret}]}
-    result = CodexAdapter(runner=FakeRunner(completed(json.dumps(payload))), secret_values=[secret]).run(agent_request)
+    result = AntigravityAdapter(runner=FakeRunner(completed(json.dumps(payload))), secret_values=[secret]).run(agent_request)
     serialized = result.model_dump_json()
     assert secret not in serialized
     assert result.data["nested"]["api_key"] == "[REDACTED]"
@@ -110,7 +124,7 @@ def test_result_recursively_redacts_secret_values_and_keys(agent_request: AgentR
 
 def test_unknown_secret_in_secret_key_and_raw_vendor_error_never_escape(agent_request: AgentRequest) -> None:
     unknown = "vendor-unknown-secret"
-    success = CodexAdapter(runner=FakeRunner(completed(json.dumps({"summary": "ok", "nested": {"credential": unknown}})))).run(agent_request)
+    success = AntigravityAdapter(runner=FakeRunner(completed(json.dumps({"summary": "ok", "nested": {"credential": unknown}})))).run(agent_request)
     failure = CodexAdapter(runner=FakeRunner(completed(returncode=2, stderr=unknown))).run(agent_request)
     assert unknown not in success.model_dump_json()
     assert unknown not in failure.model_dump_json()
@@ -120,21 +134,35 @@ def test_unknown_secret_in_secret_key_and_raw_vendor_error_never_escape(agent_re
 def test_default_adapter_allowlists_and_redacts_known_environment_secret(agent_request: AgentRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     secret = "environment-openai-secret"
     monkeypatch.setenv("OPENAI_API_KEY", secret)
-    runner = FakeRunner(completed(json.dumps({"summary": secret, "note": secret})))
+    event = {"type": "item.completed", "item": {"type": "agent_message", "text": secret}}
+    runner = FakeRunner(completed(json.dumps(event)))
     result = CodexAdapter(runner=runner).run(agent_request)
     assert runner.calls[0][3] == {"OPENAI_API_KEY": secret}
     assert secret not in result.model_dump_json()
 
 
-def test_codex_runs_noninteractively_and_parses_json(agent_request: AgentRequest) -> None:
-    runner = FakeRunner(completed(json.dumps({"summary": "done", "changed": True})))
+def test_codex_runs_noninteractively_and_parses_jsonl_event_stream(agent_request: AgentRequest) -> None:
+    stream = "\n".join([
+        json.dumps({"type": "thread.started", "thread_id": "t1"}),
+        json.dumps({"type": "item.completed", "item": {"type": "reasoning", "text": "private"}}),
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "done", "metadata": {"api_key": "unknown-secret"}}}),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1}}),
+    ])
+    runner = FakeRunner(completed(stream))
     result = CodexAdapter(runner=runner).run(agent_request)
     argv = runner.calls[0][0]
     assert argv[:4] == ["codex.exe", "exec", "--sandbox", "read-only"]
     assert "--json" in argv
     assert result.status is AgentStatus.SUCCEEDED
     assert result.summary == "done"
-    assert result.data["changed"] is True
+    assert result.data == {"message": "done"}
+    assert "unknown-secret" not in result.model_dump_json()
+
+
+@pytest.mark.parametrize("stream", ['{"type":"thread.started"}\nnot-json', '{"type":"thread.started"}\n{"type":"turn.completed"}'])
+def test_codex_jsonl_rejects_malformed_or_no_message_stream(agent_request: AgentRequest, stream: str) -> None:
+    result = CodexAdapter(runner=FakeRunner(completed(stream))).run(agent_request)
+    assert result.status is AgentStatus.INVALID_OUTPUT
 
 
 def test_cursor_uses_wsl_argv_and_does_not_interpolate_prompt(agent_request: AgentRequest) -> None:
@@ -175,6 +203,24 @@ def test_cursor_smoke_verifies_actual_sentinel_file_and_cleans_up(tmp_path: Path
     assert caps.deepseek_agent_smoke_test is True
     assert caps.deepseek_byok_available is True
     assert list(tmp_path.iterdir()) == []
+
+
+def test_sentinel_directory_at_target_fails_without_cleanup_exception(tmp_path: Path) -> None:
+    runner = DirectorySentinelRunner(completed("cursor-agent 1"), completed("authenticated"), completed('{"models":["deepseek-v3"]}'), completed("ignored"))
+    caps = CursorAdapter(runner=runner, deepseek_billing_confirmed=True, probe_dir=tmp_path).capabilities()
+    assert caps.deepseek_agent_smoke_test is False
+
+
+def test_sentinel_unlink_failure_forces_smoke_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = SentinelRunner(completed("cursor-agent 1"), completed("authenticated"), completed('{"models":["deepseek-v3"]}'), completed("ignored"))
+    original = Path.unlink
+    def fail_cleanup(path: Path, *args, **kwargs):
+        if path.name.startswith("triagent-probe-") and path.exists():
+            raise PermissionError("locked")
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "unlink", fail_cleanup)
+    caps = CursorAdapter(runner=runner, deepseek_billing_confirmed=True, probe_dir=tmp_path).capabilities()
+    assert caps.deepseek_agent_smoke_test is False
 
 
 def test_antigravity_print_mode_never_skips_permissions(agent_request: AgentRequest) -> None:
@@ -280,4 +326,10 @@ def test_live_adapter_capabilities_only_when_selected(request: pytest.FixtureReq
 def test_live_deepseek_requires_explicit_enablement(request: pytest.FixtureRequest) -> None:
     if not request.config.getoption("-m") or "live_cli" not in request.config.getoption("-m"):
         pytest.skip("select explicitly with -m live_cli")
-    pytest.skip("DeepSeek adapter is disabled; enable it with confirmed billing ownership before live probing")
+    if os.environ.get("TRIAGENT_ENABLE_DEEPSEEK_LIVE") != "1":
+        pytest.skip("set TRIAGENT_ENABLE_DEEPSEEK_LIVE=1 to enable DeepSeek live probing")
+    if not os.environ.get("DEEPSEEK_API_KEY"):
+        pytest.skip("DEEPSEEK_API_KEY is not configured")
+    if os.environ.get("TRIAGENT_DEEPSEEK_BILLING_CONFIRMED") != "1":
+        pytest.skip("set TRIAGENT_DEEPSEEK_BILLING_CONFIRMED=1 only after confirming billing ownership")
+    assert isinstance(DeepSeekAdapter(enabled=True, billing_confirmed=True).capabilities().available, bool)
