@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -10,7 +12,7 @@ from triagent.adapters.base import AgentRequest, AgentRole, AgentStatus
 from triagent.adapters.codex import CodexAdapter
 from triagent.adapters.cursor import CursorAdapter
 from triagent.adapters.deepseek import DeepSeekAdapter
-from triagent.adapters.process import ProcessResult
+from triagent.adapters.process import ProcessResult, ProcessRunner
 
 
 class FakeRunner:
@@ -28,6 +30,10 @@ class FakeRunner:
 
 def completed(stdout: str = "", returncode: int = 0, stderr: str = "") -> ProcessResult:
     return ProcessResult(returncode, stdout, stderr, False)
+
+
+def tool_evidence() -> str:
+    return json.dumps({"summary": "tool smoke ok", "triagent_tool_evidence": {"operation": "write_file", "path": "probe.txt", "succeeded": True}})
 
 
 @pytest.fixture
@@ -74,6 +80,30 @@ def test_codex_maps_process_failures(agent_request: AgentRequest, process: Proce
     assert result.status is status
 
 
+@pytest.mark.parametrize("message", ["HTTP 401", "403 Forbidden", "unauthorized", "invalid token", "expired token", "missing API key", "login required", "sign-in required"])
+def test_auth_and_configuration_failures_are_unavailable(agent_request: AgentRequest, message: str) -> None:
+    result = CodexAdapter(runner=FakeRunner(completed(returncode=1, stderr=message))).run(agent_request)
+    assert result.status is AgentStatus.UNAVAILABLE
+
+
+def test_result_recursively_redacts_secret_values_and_keys(agent_request: AgentRequest) -> None:
+    secret = "sk-review-secret"
+    payload = {"summary": f"used {secret}", "nested": {"api_key": secret, "note": secret}, "items": [{"accessToken": secret}]}
+    result = CodexAdapter(runner=FakeRunner(completed(json.dumps(payload))), secret_values=[secret]).run(agent_request)
+    serialized = result.model_dump_json()
+    assert secret not in serialized
+    assert result.data["nested"]["api_key"] == "[REDACTED]"
+
+
+def test_default_adapter_allowlists_and_redacts_known_environment_secret(agent_request: AgentRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    secret = "environment-openai-secret"
+    monkeypatch.setenv("OPENAI_API_KEY", secret)
+    runner = FakeRunner(completed(json.dumps({"summary": secret, "note": secret})))
+    result = CodexAdapter(runner=runner).run(agent_request)
+    assert runner.calls[0][3] == {"OPENAI_API_KEY": secret}
+    assert secret not in result.model_dump_json()
+
+
 def test_codex_runs_noninteractively_and_parses_json(agent_request: AgentRequest) -> None:
     runner = FakeRunner(completed(json.dumps({"summary": "done", "changed": True})))
     result = CodexAdapter(runner=runner).run(agent_request)
@@ -101,12 +131,19 @@ def test_cursor_deepseek_gates_are_independent_and_all_required() -> None:
         completed("cursor-agent 1"),
         completed("authenticated"),
         completed('{"models":["deepseek-v3"]}'),
-        completed('{"summary":"tool smoke ok"}'),
+        completed(tool_evidence()),
     )
     caps = CursorAdapter(runner=runner, deepseek_billing_confirmed=False).capabilities()
     assert caps.deepseek_model_listed is True
     assert caps.deepseek_agent_smoke_test is True
     assert caps.deepseek_billing_confirmed is False
+    assert caps.deepseek_byok_available is False
+
+
+def test_cursor_smoke_requires_structured_file_tool_evidence() -> None:
+    runner = FakeRunner(completed("cursor-agent 1"), completed("authenticated"), completed('{"models":["deepseek-v3"]}'), completed('{"summary":"claimed success"}'))
+    caps = CursorAdapter(runner=runner, deepseek_billing_confirmed=True).capabilities()
+    assert caps.deepseek_agent_smoke_test is False
     assert caps.deepseek_byok_available is False
 
 
@@ -132,7 +169,7 @@ def test_deepseek_requires_every_independent_gate() -> None:
         completed("opencode 1"),
         completed('{"reachable":true}'),
         completed('{"models":["deepseek/deepseek-chat"]}'),
-        completed('{"summary":"agent tool passed"}'),
+        completed(tool_evidence()),
     )
     caps = DeepSeekAdapter(runner=runner, enabled=True, billing_confirmed=False).capabilities()
     assert caps.api_configured_reachable is True
@@ -147,10 +184,37 @@ def test_deepseek_is_available_when_all_gates_pass() -> None:
         completed("opencode 1"),
         completed('{"reachable":true}'),
         completed('{"models":["deepseek/deepseek-chat"]}'),
-        completed('{"summary":"agent tool passed"}'),
+        completed(tool_evidence()),
     )
     caps = DeepSeekAdapter(runner=runner, enabled=True, billing_confirmed=True).capabilities()
     assert caps.available is True
+
+
+def test_deepseek_smoke_requires_structured_file_tool_evidence() -> None:
+    runner = FakeRunner(completed("opencode 1"), completed('{"reachable":true}'), completed('{"models":["deepseek/deepseek-chat"]}'), completed('{"summary":"claimed success"}'))
+    caps = DeepSeekAdapter(runner=runner, enabled=True, billing_confirmed=True).capabilities()
+    assert caps.agent_tool_smoke_test is False
+    assert caps.available is False
+
+
+@pytest.mark.parametrize("adapter", [CodexAdapter, CursorAdapter, AntigravityAdapter, lambda: DeepSeekAdapter(enabled=True)])
+def test_task_file_read_errors_return_structured_failure(tmp_path: Path, adapter) -> None:
+    request = AgentRequest(role=AgentRole.IMPLEMENTER, task_file=tmp_path / "missing.txt", workdir=tmp_path, output_schema="result-v1", timeout_seconds=10)
+    result = adapter().run(request)
+    assert result.status is AgentStatus.FAILED
+
+
+def test_process_runner_uses_safe_baseline_and_does_not_leak_unrelated_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TRIAGENT_UNRELATED_SECRET", "must-not-leak")
+    monkeypatch.setenv("OPENAI_API_KEY", "allowed-auth")
+    code = "import json,os; print(json.dumps({k:os.environ.get(k) for k in ['PATH','HOME','USERPROFILE','TEMP','TMP','OPENAI_API_KEY','TRIAGENT_UNRELATED_SECRET']}))"
+    result = ProcessRunner(redactions=["allowed-auth"]).run([sys.executable, "-c", code], tmp_path, 10, {"OPENAI_API_KEY": os.environ["OPENAI_API_KEY"]})
+    output = json.loads(result.stdout)
+    assert output["PATH"]
+    assert output.get("HOME") or output.get("USERPROFILE")
+    assert output.get("TEMP") or output.get("TMP")
+    assert output["OPENAI_API_KEY"] == "[REDACTED]"
+    assert output["TRIAGENT_UNRELATED_SECRET"] is None
 
 
 @pytest.mark.live_cli
@@ -158,3 +222,11 @@ def test_live_codex_capabilities_only_when_selected(request: pytest.FixtureReque
     if not request.config.getoption("-m") or "live_cli" not in request.config.getoption("-m"):
         pytest.skip("select explicitly with -m live_cli")
     assert isinstance(CodexAdapter().capabilities().available, bool)
+
+
+@pytest.mark.live_cli
+@pytest.mark.parametrize("adapter", [CursorAdapter, AntigravityAdapter, DeepSeekAdapter])
+def test_live_adapter_capabilities_only_when_selected(request: pytest.FixtureRequest, adapter) -> None:
+    if not request.config.getoption("-m") or "live_cli" not in request.config.getoption("-m"):
+        pytest.skip("select explicitly with -m live_cli")
+    assert isinstance(adapter().capabilities().available, bool)

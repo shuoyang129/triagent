@@ -33,9 +33,12 @@ class ProcessRunner:
     ) -> ProcessResult:
         if not argv or any(not isinstance(item, str) or not item for item in argv):
             raise ValueError("argv must contain non-empty strings")
-        environment = {key: value for key, value in env_allowlist.items() if value is not None}
-        if os.name == "nt" and "SYSTEMROOT" not in environment and os.environ.get("SYSTEMROOT"):
-            environment["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        baseline_names = (
+            "PATH", "HOME", "USERPROFILE", "TEMP", "TMP", "SYSTEMROOT",
+            "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL",
+        )
+        environment = {name: os.environ[name] for name in baseline_names if os.environ.get(name)}
+        environment.update({key: value for key, value in env_allowlist.items() if value is not None})
         try:
             completed = subprocess.run(
                 list(argv),
