@@ -61,7 +61,7 @@ def test_diff_and_handoff_describe_workspace(temp_repo: Path) -> None:
     handoff = ws.handoff(
         completed=["implementation"],
         remaining=["review"],
-        tests=TestResults(passed=["unit"], failed=[]),
+        tests=TestResults(passed=("unit",), failed=()),
         known_issues=["none"],
     )
 
