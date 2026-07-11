@@ -1,0 +1,25 @@
+[host]
+name = "travel-windows"
+platform = "windows"
+
+[paths]
+runs = "D:/workspace/runs"
+python = "C:/Users/yangs/AppData/Local/Programs/Python/Python312/python.exe"
+
+[agents.codex]
+command = ["codex"]
+
+[agents.cursor]
+command = ["wsl", "-d", "Ubuntu-24.04", "--", "bash", "-lc", "~/.local/bin/cursor-agent"]
+
+[agents.antigravity]
+command = ["C:/Users/yangs/AppData/Local/agy/bin/agy.exe"]
+
+[agents.opencode]
+enabled = false
+command = ["opencode"]
+
+[budget]
+cursor_saver_threshold = 0.70
+cursor_handoff_threshold = 0.90
+allow_paid_overage = false
