@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import uuid
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -12,7 +13,7 @@ from triagent.adapters.process import ProcessRunner
 REDACTED = "[REDACTED]"
 _SECRET_KEY = re.compile(r"(?:api[_-]?key|token|secret|password|authorization|credential)", re.IGNORECASE)
 _AUTH_FAILURES = (
-    "401", "403", "unauthorized", "forbidden", "not logged in", "unauthenticated",
+    "unauthorized", "forbidden", "not logged in", "unauthenticated",
     "authentication required", "login required", "sign-in required", "signin required",
     "invalid token", "expired token", "missing api key", "api key required",
 )
@@ -46,19 +47,26 @@ def read_prompt(request) -> tuple[str | None, AgentResult | None]:
         return None, AgentResult(status=AgentStatus.FAILED, summary="Unable to read task file")
 
 
-def has_tool_evidence(output: str) -> bool:
+def filesystem_probe(
+    runner: ProcessRunner,
+    argv_prefix: Sequence[str],
+    probe_dir: Path,
+    env: Mapping[str, str],
+    prompt_path=None,
+) -> bool:
+    nonce = uuid.uuid4().hex
+    target = probe_dir / f"triagent-probe-{uuid.uuid4().hex}.txt"
+    displayed_path = prompt_path(target) if prompt_path else str(target)
+    contract = json.dumps({"path": displayed_path, "nonce": nonce}, separators=(",", ":"))
+    prompt = f"Write the exact nonce to the exact file path using a file tool. TRIAGENT_SENTINEL={contract}"
     try:
-        payload = json.loads(output)
-        evidence = payload.get("triagent_tool_evidence", {})
-        return (
-            isinstance(evidence, dict)
-            and evidence.get("operation") in {"write_file", "create_file", "edit_file", "delete_file"}
-            and isinstance(evidence.get("path"), str)
-            and bool(evidence["path"])
-            and evidence.get("succeeded") is True
-        )
-    except (json.JSONDecodeError, AttributeError, TypeError):
+        target.unlink(missing_ok=True)
+        result = runner.run([*argv_prefix, prompt], probe_dir, 30, env)
+        return not result.timed_out and result.returncode == 0 and target.read_text(encoding="utf-8") == nonce
+    except (OSError, UnicodeError):
         return False
+    finally:
+        target.unlink(missing_ok=True)
 
 
 def invoke_json(
@@ -77,10 +85,10 @@ def invoke_json(
         return AgentResult(status=AgentStatus.TIMED_OUT, summary="CLI execution timed out")
     if process.returncode != 0:
         diagnostic = f"{process.stdout}\n{process.stderr}".lower()
-        stderr = sanitize(process.stderr, secret_values)
-        if any(marker in diagnostic for marker in _AUTH_FAILURES):
-            return AgentResult(status=AgentStatus.UNAVAILABLE, summary="CLI authentication or configuration is unavailable", stderr=str(stderr))
-        return AgentResult(status=AgentStatus.FAILED, summary="CLI execution failed", stderr=str(stderr))
+        auth_code = re.search(r"(?<!\d)(?:401|403)(?!\d)", diagnostic) is not None
+        if auth_code or any(marker in diagnostic for marker in _AUTH_FAILURES):
+            return AgentResult(status=AgentStatus.UNAVAILABLE, summary="CLI authentication or configuration is unavailable")
+        return AgentResult(status=AgentStatus.FAILED, summary="CLI execution failed")
     try:
         payload = json.loads(process.stdout)
     except (json.JSONDecodeError, TypeError):
@@ -93,8 +101,8 @@ def invoke_json(
         status=AgentStatus.SUCCEEDED,
         summary=payload["summary"],
         data=payload,
-        stdout=str(sanitize(process.stdout, secret_values)),
-        stderr=str(sanitize(process.stderr, secret_values)),
+        stdout="",
+        stderr="",
     )
 
 
