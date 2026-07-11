@@ -1,0 +1,13 @@
+.worktrees/
+.tokensave/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.venv/
+work/capabilities/
+runs/
+*.db
+*.sqlite3
+.env
+.env.*
+!.env.example
