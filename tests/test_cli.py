@@ -1,9 +1,11 @@
 from pathlib import Path
 import subprocess
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
 from triagent.cli import app
+import triagent.cli as cli_module
 from triagent.report import REPORT_FIELDS
 from triagent.report import render_report
 
@@ -102,3 +104,41 @@ def test_create_status_approve_report_and_doctor_are_operator_readable(tmp_path:
     assert report.exit_code == 0 and "## state" in report.output
     doctor = runner.invoke(app, ["doctor", "--profile", "fake"])
     assert doctor.exit_code == 0 and "fake: ready" in doctor.output.lower()
+
+
+def test_doctor_profile_lists_safe_vendor_capability_summaries(monkeypatch, tmp_path: Path) -> None:
+    profile = tmp_path / "profile.toml"
+    profile.write_text("[agents.opencode]\nenabled = false\n", encoding="utf-8")
+    calls: list[str] = []
+
+    def adapter(name: str, *, available: bool, authenticated: bool):
+        class Stub:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def capabilities(self):
+                calls.append(name)
+                return SimpleNamespace(
+                    available=available,
+                    authenticated=authenticated,
+                    headless=True,
+                    version=f"{name}-version",
+                )
+
+        return Stub
+
+    monkeypatch.setattr(cli_module, "CodexAdapter", adapter("codex", available=True, authenticated=True))
+    monkeypatch.setattr(cli_module, "CursorAdapter", adapter("cursor", available=False, authenticated=False))
+    monkeypatch.setattr(cli_module, "AntigravityAdapter", adapter("antigravity", available=True, authenticated=True))
+    monkeypatch.setattr(cli_module, "DeepSeekAdapter", adapter("opencode/deepseek", available=False, authenticated=False))
+
+    result = runner.invoke(app, ["doctor", "--profile", str(profile)])
+
+    assert result.exit_code == 0, result.output
+    assert calls == ["codex", "cursor", "antigravity", "opencode/deepseek"]
+    for name in calls:
+        assert name in result.output.lower()
+    assert "available=yes" in result.output.lower()
+    assert "available=no" in result.output.lower()
+    assert "authenticated=yes" in result.output.lower()
+    assert "credential" not in result.output.lower()

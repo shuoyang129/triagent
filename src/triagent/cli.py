@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import os
+import tomllib
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from triagent.adapters.base import AgentRequest, AgentResult, AgentStatus
+from triagent.adapters.antigravity import AntigravityAdapter
+from triagent.adapters.codex import CodexAdapter
+from triagent.adapters.cursor import CursorAdapter
+from triagent.adapters.deepseek import DeepSeekAdapter
 from triagent.adapters.fake import FakeAgent
 from triagent.domain import TaskSpec
 from triagent.git_workspace import GitWorkspace
@@ -98,8 +103,29 @@ def report_command(task_id: str, data_root: DataRoot = None) -> None:
 def doctor(profile: Annotated[str, typer.Option()] = "fake") -> None:
     if profile == "fake":
         typer.echo("Fake: ready (no vendor calls)")
-    else:
-        typer.echo(f"Profile: {profile}\nUse adapter capability checks before live execution.")
+        return
+
+    profile_path = Path(profile)
+    try:
+        config = tomllib.loads(profile_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise typer.BadParameter(f"Cannot read profile: {profile_path}") from error
+
+    opencode_enabled = bool(config.get("agents", {}).get("opencode", {}).get("enabled", False))
+    probes = (
+        ("codex", CodexAdapter()),
+        ("cursor", CursorAdapter(deepseek_billing_confirmed=False)),
+        ("antigravity", AntigravityAdapter()),
+        ("opencode/deepseek", DeepSeekAdapter(enabled=opencode_enabled, billing_confirmed=False)),
+    )
+    typer.echo(f"Profile: {profile_path}")
+    for name, adapter in probes:
+        capability = adapter.capabilities()
+        typer.echo(
+            f"{name}: available={'yes' if capability.available else 'no'} "
+            f"authenticated={'yes' if capability.authenticated else 'no'} "
+            f"headless={'yes' if capability.headless else 'no'}"
+        )
 
 
 if __name__ == "__main__":

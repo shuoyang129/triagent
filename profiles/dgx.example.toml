@@ -1,0 +1,34 @@
+[host]
+name = "dgx-spark-placeholder"
+platform = "ubuntu-24.04"
+hardware = "nvidia-dgx-spark"
+address = "dgx-host.example.invalid"
+
+[paths]
+runs = "/srv/triagent/runs"
+workspace = "/srv/triagent/workspace"
+
+[capabilities]
+nvidia_gpu = true
+container_runtime = "nvidia-container-toolkit"
+robot_simulation = "isaac-lab"
+visualization = ["local-display", "webrtc"]
+background_execution = ["systemd-user", "tmux"]
+
+[agents.codex]
+command = ["codex"]
+
+[agents.cursor]
+command = ["cursor-agent"]
+
+[agents.antigravity]
+command = ["agy"]
+
+[agents.opencode]
+enabled = false
+command = ["opencode"]
+
+[budget]
+cursor_saver_threshold = 0.70
+cursor_handoff_threshold = 0.90
+allow_paid_overage = false
