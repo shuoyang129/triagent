@@ -47,6 +47,35 @@ def test_exact_fixture_run_uses_persistent_git_worktree_and_preserves_source(tmp
     subprocess.run(["git", "worktree", "remove", "--force", str(isolated)], cwd=fixture, check=True)
 
 
+def test_exact_default_root_invocation_isolated_and_preserves_fixture(tmp_path: Path, monkeypatch) -> None:
+    fixture = tmp_path / "tests" / "fixtures" / "sample-repo"
+    fixture.mkdir(parents=True)
+    readme = fixture / "README.md"
+    readme.write_text("fixture source\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=fixture, check=True)
+    subprocess.run(["git", "config", "user.email", "fake@example.invalid"], cwd=fixture, check=True)
+    subprocess.run(["git", "config", "user.name", "Fake Test"], cwd=fixture, check=True)
+    subprocess.run(["git", "add", "README.md"], cwd=fixture, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=fixture, check=True)
+    source_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=fixture, check=True, capture_output=True, text=True).stdout.strip()
+
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["run", "--profile", "fake", "tests/fixtures/sample-repo", "add a health endpoint"])
+
+    assert result.exit_code == 0, result.output
+    assert "State: APPROVAL" in result.output
+    task_id = result.output.split("Task: ", 1)[1].splitlines()[0]
+    run_dir = tmp_path / ".triagent" / "runs" / task_id
+    isolated = run_dir / "worktree"
+    assert (run_dir / "final-report.md").exists()
+    assert (isolated / ".git").exists()
+    assert (isolated / "health-endpoint.txt").read_text(encoding="utf-8") == "ok\n"
+    assert readme.read_text(encoding="utf-8") == "fixture source\n"
+    assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=fixture, check=True, capture_output=True, text=True).stdout.strip() == source_head
+    assert subprocess.run(["git", "status", "--porcelain"], cwd=fixture, check=True, capture_output=True, text=True).stdout == ""
+    subprocess.run(["git", "worktree", "remove", "--force", str(isolated)], cwd=fixture, check=True)
+
+
 def test_report_redacts_reasoning_and_credentials(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-environment-secret")
     report = render_report({
