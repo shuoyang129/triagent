@@ -1,0 +1,25 @@
+from types import SimpleNamespace
+
+import pytest
+
+from triagent.domain import RiskLevel
+from triagent.router import ImplementationRouter
+
+
+@pytest.mark.parametrize(("usage", "expected"), [(0.69, "cursor"), (0.70, "deepseek"), (0.90, "deepseek")])
+def test_cursor_budget_thresholds(usage: float, expected: str) -> None:
+    capabilities = {"cursor": SimpleNamespace(available=True), "deepseek": SimpleNamespace(available=True)}
+    assert ImplementationRouter().choose(cursor_usage=usage, capabilities=capabilities, risk="low").name == expected
+
+
+def test_high_risk_does_not_route_to_deepseek_saver() -> None:
+    assert ImplementationRouter().choose(0.75, {"cursor": True, "deepseek": True}, RiskLevel.HIGH).name == "cursor"
+
+
+def test_quota_error_hands_off_and_unavailable_agents_fail_safely() -> None:
+    router = ImplementationRouter()
+    assert router.choose(0.1, {"cursor": True, "deepseek": True}, "low", cursor_quota_error=True).name == "deepseek"
+    with pytest.raises(RuntimeError, match="No suitable implementation agent"):
+        router.choose(0.5, {"cursor": False, "deepseek": False}, "low")
+    with pytest.raises(RuntimeError, match="No suitable implementation agent"):
+        router.choose(0.5, {"cursor": True, "deepseek": False}, "low", cursor_quota_error=True)
