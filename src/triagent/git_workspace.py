@@ -31,6 +31,10 @@ class Handoff:
     remaining: tuple[str, ...]
     tests: TestResults
     known_issues: tuple[str, ...]
+    task_spec: dict[str, object] | None = None
+    final_diff: str = ""
+    artifacts: tuple[str, ...] = ()
+    rollback: str = "preserve branch and remove worktree only after approval"
 
     @property
     def test_results(self) -> TestResults:
@@ -51,6 +55,8 @@ class GitWorkspace:
             raise ValueError(f"invalid task_id: {task_id!r}")
 
         repo = Path(repo).resolve()
+        if _git(repo, "status", "--porcelain", "--", "."):
+            raise RuntimeError("dirty source checkout; commit or stash changes before creating a task")
         base_commit = _git(repo, "rev-parse", "HEAD")
         if destination is None:
             root = repo.parent / ".worktrees" / repo.name
@@ -80,6 +86,9 @@ class GitWorkspace:
         remaining: Iterable[str] = (),
         tests: TestResults | None = None,
         known_issues: Iterable[str] = (),
+        task_spec: dict[str, object] | None = None,
+        artifacts: Iterable[str] = (),
+        rollback: str = "preserve branch and remove worktree only after approval",
     ) -> Handoff:
         changed = set(
             filter(
@@ -103,10 +112,21 @@ class GitWorkspace:
             remaining=tuple(remaining),
             tests=tests or TestResults(),
             known_issues=tuple(known_issues),
+            task_spec=task_spec,
+            final_diff=self.diff(),
+            artifacts=tuple(artifacts),
+            rollback=rollback,
         )
 
     def cleanup(self) -> None:
         _git(self.repo, "worktree", "remove", str(self.path))
+
+    def prune_branch(self, *, approved: bool = False) -> None:
+        if not approved:
+            raise PermissionError("branch pruning requires explicit approval")
+        if self.path.exists():
+            raise RuntimeError("clean up the worktree before pruning its preservation branch")
+        _git(self.repo, "branch", "-D", f"triagent/{self.task_id}")
 
 
 def _git(cwd: Path, *args: str) -> str:

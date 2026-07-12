@@ -78,15 +78,14 @@ def test_exact_default_root_invocation_isolated_and_preserves_fixture(tmp_path: 
     subprocess.run(["git", "worktree", "remove", "--force", str(isolated)], cwd=fixture, check=True)
 
 
-def test_report_redacts_reasoning_and_credentials(monkeypatch) -> None:
+def test_legacy_report_redacts_credentials(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-environment-secret")
     report = render_report({
         "state": "APPROVAL",
-        "user outcome": "chain-of-thought: private deliberation",
+        "user outcome": "structured outcome",
         "tests": "api_key=unknown-credential",
         "independent review": "token: sk-environment-secret",
     })
-    assert "private deliberation" not in report
     assert "unknown-credential" not in report
     assert "sk-environment-secret" not in report
 

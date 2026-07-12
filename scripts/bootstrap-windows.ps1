@@ -8,7 +8,8 @@ function Invoke-Probe {
     param([scriptblock]$Command)
     try {
         $text = (& $Command 2>$null | Out-String).Trim()
-        return @{ ok = $true; text = $text }
+        $code = $LASTEXITCODE
+        return @{ ok = ($null -eq $code -or $code -eq 0); text = $(if ($null -eq $code -or $code -eq 0) { $text } else { "" }) }
     } catch {
         return @{ ok = $false; text = "" }
     }

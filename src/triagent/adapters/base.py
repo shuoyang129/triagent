@@ -37,6 +37,7 @@ class AgentRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     role: AgentRole
+    agent_identity: str = "unspecified"
     task_file: Path
     workdir: Path
     output_schema: str = Field(min_length=1)

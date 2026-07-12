@@ -16,7 +16,8 @@ from triagent.adapters.fake import FakeAgent
 from triagent.domain import TaskSpec
 from triagent.git_workspace import GitWorkspace
 from triagent.orchestrator import Orchestrator
-from triagent.report import render_report, write_report
+from triagent.report import render_persisted_report, render_report, write_report
+from triagent.router import ImplementationRouter
 from triagent.store import TaskStore
 
 
@@ -71,18 +72,33 @@ def create(repo: Path, goal: str, data_root: DataRoot = None) -> None:
 
 
 @app.command()
-def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake", data_root: DataRoot = None) -> None:
-    if profile != "fake":
-        raise typer.BadParameter("Only the fake profile is enabled by this bootstrap command")
+def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake", data_root: DataRoot = None,
+        live_confirmed: Annotated[bool, typer.Option("--live-confirmed")] = False,
+        billing_confirmed: Annotated[bool, typer.Option("--billing-confirmed")] = False) -> None:
+    if profile != "fake" and not (live_confirmed and billing_confirmed):
+        raise typer.BadParameter("real profiles require --live-confirmed and --billing-confirmed")
     store = TaskStore(_root(data_root))
     task = store.create_task(_spec(repo, goal))
     run_worktree = store.runs_root / task.id / "worktree"
     run_worktree.rmdir()
-    GitWorkspace.create(repo, task.id, destination=run_worktree)
-    success = AgentResult(status=AgentStatus.SUCCEEDED, summary="fake success")
-    orchestrator = Orchestrator(store, _FakeImplementer([success]), FakeAgent([success]), FakeAgent([success]))
+    try:
+        GitWorkspace.create(repo, task.id, destination=run_worktree)
+    except Exception as error:
+        store.fail_setup(task.id, f"Git setup failed: {error}")
+        raise typer.BadParameter(str(error)) from error
+    if profile == "fake":
+        success = AgentResult(status=AgentStatus.SUCCEEDED, summary="fake success")
+        orchestrator = Orchestrator(store, _FakeImplementer([success]), FakeAgent([success]), FakeAgent([success]))
+    else:
+        config = tomllib.loads(Path(profile).read_text(encoding="utf-8"))
+        cursor = CursorAdapter(command=_profile_command(config, "cursor"), deepseek_billing_confirmed=billing_confirmed)
+        codex = CodexAdapter(command=_profile_command(config, "codex"))
+        antigravity = AntigravityAdapter(command=_profile_command(config, "antigravity"))
+        deepseek = DeepSeekAdapter(command=_profile_command(config, "opencode"), enabled=True, billing_confirmed=True, live_confirmed=True, validated_ready=True)
+        choice = ImplementationRouter().choose(cursor_usage=0.0, capabilities={"cursor": cursor.capabilities(), "deepseek": deepseek.capabilities()})
+        orchestrator = Orchestrator(store, cursor if choice.name == "cursor" else deepseek, codex, antigravity)
     state = orchestrator.run_until_blocked(task.id)
-    write_report(store.runs_root / task.id / "final-report.md", _values(state.value, complete=True))
+    (store.runs_root / task.id / "final-report.md").write_text(render_persisted_report(store, task.id), encoding="utf-8")
     typer.echo(f"Task: {task.id}\nState: {state.value}\nReport: {store.runs_root / task.id / 'final-report.md'}")
 
 
@@ -93,7 +109,7 @@ def status(task_id: str, data_root: DataRoot = None) -> None:
 
 
 @app.command()
-def approve(task_id: str, action: str = "visual", data_root: DataRoot = None) -> None:
+def approve(task_id: str, action: str, data_root: DataRoot = None) -> None:
     store = TaskStore(_root(data_root))
     orchestrator = Orchestrator(store, FakeAgent([]), FakeAgent([]), FakeAgent([]))
     try:

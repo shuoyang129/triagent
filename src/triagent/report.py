@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Mapping
 
 from triagent.adapters._cli import REDACTED, sanitize
+from triagent.store import TaskStore
 
 
 REPORT_FIELDS = (
@@ -20,7 +21,6 @@ REPORT_FIELDS = (
 )
 
 
-_INTERNAL_REASONING = re.compile(r"(?:chain[- ]of[- ]thought|internal reasoning|private deliberation)", re.IGNORECASE)
 _CREDENTIAL_ASSIGNMENT = re.compile(
     r"(?i)\b(api[_-]?key|token|secret|password|authorization|credential)\b\s*[:=]\s*[^\s,;]+"
 )
@@ -29,8 +29,6 @@ _CREDENTIAL_ASSIGNMENT = re.compile(
 def _safe_text(value: str, secrets: tuple[str, ...]) -> str:
     cleaned = sanitize(value, secrets)
     assert isinstance(cleaned, str)
-    if _INTERNAL_REASONING.search(cleaned):
-        return REDACTED
     return _CREDENTIAL_ASSIGNMENT.sub(lambda match: f"{match.group(1)}={REDACTED}", cleaned)
 
 
@@ -49,3 +47,18 @@ def render_report(values: Mapping[str, str], *, secret_values: tuple[str, ...] =
 def write_report(path: Path, values: Mapping[str, str]) -> Path:
     path.write_text(render_report(values), encoding="utf-8")
     return path
+
+def render_persisted_report(store: TaskStore, task_id: str) -> str:
+    task = store.load(task_id); outcomes = store.outcomes(task_id)
+    verify = outcomes.get("verify"); review = outcomes.get("review"); setup = outcomes.get("setup")
+    values = {
+        "state": task.state.value,
+        "user outcome": (setup or outcomes.get("implement")).summary if (setup or outcomes.get("implement")) else "unknown/missing",
+        "tests": verify.summary if verify else "unknown/missing",
+        "independent review": review.summary if review else "unknown/missing",
+        "visual artifacts": ", ".join(review.artifacts) if review and review.artifacts else "unknown/missing",
+        "residual risk": "unknown/missing",
+        "rollback": next((o.rollback for o in outcomes.values() if o.rollback != "unknown/missing"), "unknown/missing"),
+        "pending approval": "explicit outcome/merge/deploy/destructive authorization as applicable",
+    }
+    return render_report(values)

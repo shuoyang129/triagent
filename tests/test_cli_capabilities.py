@@ -323,11 +323,15 @@ def test_auth_status_codes_require_numeric_boundaries(agent_request: AgentReques
     assert result.status is status
 
 
-@pytest.mark.parametrize("adapter", [CodexAdapter, CursorAdapter, AntigravityAdapter, lambda: DeepSeekAdapter(enabled=True)])
+@pytest.mark.parametrize("adapter", [CodexAdapter, CursorAdapter, AntigravityAdapter])
 def test_task_file_read_errors_return_structured_failure(tmp_path: Path, adapter) -> None:
     request = AgentRequest(role=AgentRole.IMPLEMENTER, task_file=tmp_path / "missing.txt", workdir=tmp_path, output_schema="result-v1", timeout_seconds=10)
     result = adapter().run(request)
     assert result.status is AgentStatus.FAILED
+
+def test_deepseek_incomplete_live_gates_precede_task_file_access(tmp_path: Path) -> None:
+    request = AgentRequest(role=AgentRole.IMPLEMENTER, task_file=tmp_path / "missing.txt", workdir=tmp_path, output_schema="result-v1", timeout_seconds=10)
+    assert DeepSeekAdapter(enabled=True).run(request).status is AgentStatus.UNAVAILABLE
 
 
 def test_process_runner_uses_safe_baseline_and_does_not_leak_unrelated_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

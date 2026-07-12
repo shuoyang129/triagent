@@ -28,6 +28,25 @@ class TaskState(StrEnum):
     FAILED_FINAL = "FAILED_FINAL"
 
 
+class StageOutcome(BaseModel):
+    """Narrow persisted result. Raw model output and reasoning are intentionally absent."""
+    model_config = ConfigDict(frozen=True)
+    stage: Literal["setup", "implement", "verify", "review"]
+    status: Literal["passed", "failed", "unknown"]
+    summary: str = Field(min_length=1, max_length=1000)
+    evidence: list[str] = Field(default_factory=list, max_length=50)
+    artifacts: list[str] = Field(default_factory=list, max_length=50)
+    rollback: str = Field(default="unknown/missing", max_length=1000)
+
+    @model_validator(mode="after")
+    def reject_reasoning_requests(self) -> "StageOutcome":
+        forbidden = ("chain-of-thought", "internal reasoning", "private deliberation")
+        values = [self.summary, self.rollback, *self.evidence, *self.artifacts]
+        if any(term in value.lower() for term in forbidden for value in values):
+            raise ValueError("reasoning must never be requested or persisted")
+        return self
+
+
 class ReviewSeverity(StrEnum):
     BLOCKER = "BLOCKER"
     MAJOR = "MAJOR"

@@ -22,11 +22,13 @@ class DeepSeekCapabilities(AgentCapabilities):
 
 
 class DeepSeekAdapter(AgentAdapter):
-    def __init__(self, runner: ProcessRunner | None = None, enabled: bool = False, billing_confirmed: bool = False, secret_values: Sequence[str] = (), probe_dir: Path | None = None, command: Sequence[str] = ("opencode.exe",), probe_installed: bool = False) -> None:
+    def __init__(self, runner: ProcessRunner | None = None, enabled: bool = False, billing_confirmed: bool = False, live_confirmed: bool = False, validated_ready: bool = False, secret_values: Sequence[str] = (), probe_dir: Path | None = None, command: Sequence[str] = ("opencode.exe",), probe_installed: bool = False) -> None:
         default_runner, self._env, self._secrets = runtime(("DEEPSEEK_API_KEY", "OPENCODE_API_KEY"), secret_values)
         self._runner = runner or default_runner
         self._enabled = enabled
         self._billing = billing_confirmed
+        self._live_confirmed = live_confirmed
+        self._validated_ready = validated_ready
         self._probe_dir = probe_dir or Path(tempfile.gettempdir())
         self._command = list(command)
         self._probe_installed = probe_installed
@@ -58,9 +60,9 @@ class DeepSeekAdapter(AgentAdapter):
         return DeepSeekCapabilities(available=available, installed=installed, version=version or None, authenticated=reachable, headless=installed, ready=available, enabled=True, api_configured_reachable=reachable, model_listed=listed, agent_tool_smoke_test=smoke, billing_confirmed=self._billing)
 
     def run(self, request: AgentRequest) -> AgentResult:
-        if not self._enabled:
+        if not (self._enabled and self._billing and self._live_confirmed and self._validated_ready):
             from triagent.adapters.base import AgentStatus
-            return AgentResult(status=AgentStatus.UNAVAILABLE, summary="DeepSeek/OpenCode adapter is disabled")
+            return AgentResult(status=AgentStatus.UNAVAILABLE, summary="DeepSeek/OpenCode live, billing, and readiness gates are incomplete")
         prompt, error = read_prompt(request)
         if error:
             return error
