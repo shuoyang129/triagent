@@ -25,16 +25,18 @@ class ImplementationRouter:
         if measured is None or not 0 <= measured <= 1:
             raise ValueError("Cursor usage must be between 0 and 1")
         available = capabilities or {}
-        cursor = self._available(available.get("cursor"))
-        deepseek = self._available(available.get("deepseek"))
         risk_level = RiskLevel(risk)
+        cursor = self._suitable(available.get("cursor"), risk_level)
+        deepseek = self._suitable(available.get("deepseek"), risk_level)
 
         handoff = cursor_quota_error or measured >= 0.90
         saver = measured >= 0.70 and risk_level is RiskLevel.LOW
-        if (handoff or saver) and deepseek:
-            return ImplementationChoice("deepseek")
-        if cursor_quota_error:
+        if handoff:
+            if deepseek:
+                return ImplementationChoice("deepseek")
             raise RuntimeError("No suitable implementation agent is available")
+        if saver and deepseek:
+            return ImplementationChoice("deepseek")
         if cursor:
             return ImplementationChoice("cursor")
         if deepseek and risk_level is RiskLevel.LOW:
@@ -42,5 +44,15 @@ class ImplementationRouter:
         raise RuntimeError("No suitable implementation agent is available")
 
     @staticmethod
-    def _available(value: Any) -> bool:
-        return value if isinstance(value, bool) else bool(getattr(value, "available", False))
+    def _suitable(value: Any, risk: RiskLevel) -> bool:
+        if isinstance(value, Mapping):
+            available = bool(value.get("available", False))
+            risks = value.get("risks")
+        else:
+            available = value if isinstance(value, bool) else bool(getattr(value, "available", False))
+            risks = getattr(value, "risks", None)
+        if not available:
+            return False
+        if risk is RiskLevel.LOW:
+            return True
+        return risks is not None and risk.value in {str(item) for item in risks}

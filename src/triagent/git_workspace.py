@@ -46,15 +46,19 @@ class GitWorkspace:
     base_commit: str
 
     @classmethod
-    def create(cls, repo: Path, task_id: str) -> GitWorkspace:
+    def create(cls, repo: Path, task_id: str, destination: Path | None = None) -> GitWorkspace:
         if not _TASK_ID.fullmatch(task_id) or task_id in {".", ".."}:
             raise ValueError(f"invalid task_id: {task_id!r}")
 
         repo = Path(repo).resolve()
         base_commit = _git(repo, "rev-parse", "HEAD")
-        root = repo.parent / ".worktrees" / repo.name
-        path = root / task_id
-        root.mkdir(parents=True, exist_ok=True)
+        if destination is None:
+            root = repo.parent / ".worktrees" / repo.name
+            path = root / task_id
+            root.mkdir(parents=True, exist_ok=True)
+        else:
+            path = Path(destination).resolve()
+            path.parent.mkdir(parents=True, exist_ok=True)
         _git(
             repo,
             "worktree",

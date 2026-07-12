@@ -6,9 +6,10 @@ from typing import Annotated
 
 import typer
 
-from triagent.adapters.base import AgentResult, AgentStatus
+from triagent.adapters.base import AgentRequest, AgentResult, AgentStatus
 from triagent.adapters.fake import FakeAgent
 from triagent.domain import TaskSpec
+from triagent.git_workspace import GitWorkspace
 from triagent.orchestrator import Orchestrator
 from triagent.report import render_report, write_report
 from triagent.store import TaskStore
@@ -16,6 +17,12 @@ from triagent.store import TaskStore
 
 app = typer.Typer(no_args_is_help=True, help="Run and inspect TriAgent tasks.")
 DataRoot = Annotated[Path, typer.Option(help="TriAgent state directory.")]
+
+
+class _FakeImplementer(FakeAgent):
+    def run(self, request: AgentRequest) -> AgentResult:
+        (request.workdir / "health-endpoint.txt").write_text("ok\n", encoding="utf-8")
+        return super().run(request)
 
 
 def _root(value: Path | None) -> Path:
@@ -51,8 +58,11 @@ def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake",
         raise typer.BadParameter("Only the fake profile is enabled by this bootstrap command")
     store = TaskStore(_root(data_root))
     task = store.create_task(_spec(repo, goal))
+    run_worktree = store.runs_root / task.id / "worktree"
+    run_worktree.rmdir()
+    GitWorkspace.create(repo, task.id, destination=run_worktree)
     success = AgentResult(status=AgentStatus.SUCCEEDED, summary="fake success")
-    orchestrator = Orchestrator(store, FakeAgent([success]), FakeAgent([success]), FakeAgent([success]))
+    orchestrator = Orchestrator(store, _FakeImplementer([success]), FakeAgent([success]), FakeAgent([success]))
     state = orchestrator.run_until_blocked(task.id)
     write_report(store.runs_root / task.id / "final-report.md", _values(state.value, complete=True))
     typer.echo(f"Task: {task.id}\nState: {state.value}\nReport: {store.runs_root / task.id / 'final-report.md'}")

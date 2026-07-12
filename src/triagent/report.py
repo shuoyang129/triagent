@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 from typing import Mapping
+
+from triagent.adapters._cli import REDACTED, sanitize
 
 
 REPORT_FIELDS = (
@@ -16,8 +20,30 @@ REPORT_FIELDS = (
 )
 
 
-def render_report(values: Mapping[str, str]) -> str:
-    return "\n\n".join(f"## {field}\n\n{values.get(field, 'None')}" for field in REPORT_FIELDS) + "\n"
+_INTERNAL_REASONING = re.compile(r"(?:chain[- ]of[- ]thought|internal reasoning|private deliberation)", re.IGNORECASE)
+_CREDENTIAL_ASSIGNMENT = re.compile(
+    r"(?i)\b(api[_-]?key|token|secret|password|authorization|credential)\b\s*[:=]\s*[^\s,;]+"
+)
+
+
+def _safe_text(value: str, secrets: tuple[str, ...]) -> str:
+    cleaned = sanitize(value, secrets)
+    assert isinstance(cleaned, str)
+    if _INTERNAL_REASONING.search(cleaned):
+        return REDACTED
+    return _CREDENTIAL_ASSIGNMENT.sub(lambda match: f"{match.group(1)}={REDACTED}", cleaned)
+
+
+def render_report(values: Mapping[str, str], *, secret_values: tuple[str, ...] = ()) -> str:
+    environment_secrets = tuple(
+        value for key, value in os.environ.items()
+        if value and re.search(r"(?i)(?:api[_-]?key|token|secret|password|credential)", key)
+    )
+    secrets = tuple(dict.fromkeys([*secret_values, *environment_secrets]))
+    return "\n\n".join(
+        f"## {field}\n\n{_safe_text(str(values.get(field, 'None')), secrets)}"
+        for field in REPORT_FIELDS
+    ) + "\n"
 
 
 def write_report(path: Path, values: Mapping[str, str]) -> Path:
