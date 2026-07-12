@@ -10,8 +10,8 @@ Record each gate independently on the real Windows work host and Ubuntu 24.04 DG
 
 ## 2. Codex, Cursor, and Antigravity CLI login and capability
 
-- Command: run each CLI's read-only version and login-status probe interactively on its intended host.
-- Evidence: version, authenticated boolean, headless capability, and timestamp; omit tokens and cookies.
+- Command: `codex --version`, `codex login status`, `cursor-agent --version`, `cursor-agent status`, and `agy --version` on the intended host. Do not run an Antigravity auth-status command: the installed CLI documents none.
+- Evidence: version, installed status, authenticated/ready status, and timestamp; omit tokens and cookies. Record `Antigravity authentication: unknown` until an operator verifies login through a documented onsite method.
 - Result: pending onsite verification.
 
 ## 3. systemd user service behavior

@@ -23,7 +23,7 @@ class CursorCapabilities(AgentCapabilities):
 class CursorAdapter(AgentAdapter):
     _prefix = ["wsl.exe", "--distribution", "Ubuntu-24.04", "--exec", "bash", "--noprofile", "-c"]
 
-    def __init__(self, runner: ProcessRunner | None = None, deepseek_billing_confirmed: bool = False, secret_values: Sequence[str] = (), probe_dir: Path | None = None) -> None:
+    def __init__(self, runner: ProcessRunner | None = None, deepseek_billing_confirmed: bool = False, secret_values: Sequence[str] = (), probe_dir: Path | None = None, command: Sequence[str] | None = None) -> None:
         default_runner, self._env, self._secrets = runtime(("CURSOR_API_KEY", "DEEPSEEK_API_KEY"), secret_values)
         bridge = [f"{name}/u" for name in ("CURSOR_API_KEY", "DEEPSEEK_API_KEY") if name in self._env]
         if bridge:
@@ -31,8 +31,11 @@ class CursorAdapter(AgentAdapter):
         self._runner = runner or default_runner
         self._billing = deepseek_billing_confirmed
         self._probe_dir = probe_dir or Path(tempfile.gettempdir())
+        self._configured_command = list(command) if command is not None else None
 
     def _command(self, *args: str) -> list[str]:
+        if self._configured_command is not None:
+            return [*self._configured_command, *args]
         return [*self._prefix, 'exec "$HOME/.local/bin/cursor-agent" "$@"', "cursor", *args]
 
     @staticmethod
@@ -56,7 +59,8 @@ class CursorAdapter(AgentAdapter):
                 model_listed = False
             smoke = filesystem_probe(self._runner, self._command("--print", "--json"), self._probe_dir, self._env, self._wsl_path)
         byok = model_listed and smoke and self._billing
-        return CursorCapabilities(available=installed and authenticated, version=version or None, authenticated=authenticated, headless=installed, deepseek_model_listed=model_listed, deepseek_agent_smoke_test=smoke, deepseek_billing_confirmed=self._billing, deepseek_byok_available=byok)
+        ready = installed and authenticated
+        return CursorCapabilities(available=ready, installed=installed, version=version or None, authenticated=authenticated, headless=installed, ready=ready, deepseek_model_listed=model_listed, deepseek_agent_smoke_test=smoke, deepseek_billing_confirmed=self._billing, deepseek_byok_available=byok)
 
     def run(self, request: AgentRequest) -> AgentResult:
         prompt, error = read_prompt(request)

@@ -44,6 +44,9 @@ def test_skill_has_valid_trigger_metadata_and_operator_workflow() -> None:
         "triagent report",
     ):
         assert phrase in text.lower()
+    assert "non-fake" in text.lower()
+    assert "phase b" in text.lower()
+    assert "triagent run --profile fake" in text.lower()
 
 
 def test_skill_command_examples_use_only_triagent_operator_boundary() -> None:
@@ -102,6 +105,14 @@ def test_dgx_bootstrap_safe_runtime_paths_do_not_install() -> None:
     assert "cancel" in (refused.stdout + refused.stderr).lower()
     assert "apt-get install" not in refused.stdout.lower()
 
+    forced_text = subprocess.run(["bash", str(BOOTSTRAP), "--install"], input="INSTALL\n", capture_output=True, text=True)
+    assert forced_text.returncode != 0
+    assert "interactive confirmation is required" in (forced_text.stdout + forced_text.stderr).lower()
+
+    invalid = subprocess.run(["bash", str(BOOTSTRAP), "--unexpected"], capture_output=True, text=True)
+    assert invalid.returncode == 2
+    assert "usage:" in invalid.stderr.lower()
+
 
 def test_onsite_checklist_has_separate_gates_commands_and_evidence() -> None:
     text = read(CHECKLIST).lower()
@@ -121,3 +132,8 @@ def test_onsite_checklist_has_separate_gates_commands_and_evidence() -> None:
     assert text.count("evidence:") >= 8
     assert "cannot be inferred" in text
     assert "simulated local tests" in text
+    assert "codex --version" in text
+    assert "cursor-agent --version" in text
+    assert "agy --version" in text
+    assert "antigravity authentication: unknown" in text
+    assert "agy auth" not in text

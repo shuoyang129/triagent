@@ -232,12 +232,48 @@ def test_antigravity_print_mode_never_skips_permissions(agent_request: AgentRequ
     assert result.status is AgentStatus.SUCCEEDED
 
 
+def test_antigravity_capabilities_use_only_bounded_version_probe_and_auth_is_unknown() -> None:
+    runner = FakeRunner(completed("agy 1.2.3"))
+
+    caps = AntigravityAdapter(runner=runner, command=["/opt/agy"]).capabilities()
+
+    assert [call[0] for call in runner.calls] == [["/opt/agy", "--version"]]
+    assert runner.calls[0][2] == 10
+    assert caps.installed is True
+    assert caps.authenticated is None
+    assert caps.ready is None
+    assert caps.available is False
+    assert all("auth" not in argument.lower() for call in runner.calls for argument in call[0])
+
+
+def test_antigravity_timeout_never_infers_authentication() -> None:
+    runner = FakeRunner(ProcessResult(None, "", "", True))
+
+    caps = AntigravityAdapter(runner=runner).capabilities()
+
+    assert caps.installed is False
+    assert caps.authenticated is None
+    assert caps.ready is None
+    assert len(runner.calls) == 1
+
+
 def test_deepseek_defaults_disabled_without_running_probes() -> None:
     runner = FakeRunner()
     caps = DeepSeekAdapter(runner=runner).capabilities()
     assert caps.available is False
     assert caps.enabled is False
     assert runner.calls == []
+
+
+def test_deepseek_doctor_mode_checks_only_configured_executable_when_disabled() -> None:
+    runner = FakeRunner(completed("opencode 2"))
+
+    caps = DeepSeekAdapter(runner=runner, command=["/opt/opencode"], probe_installed=True).capabilities()
+
+    assert [call[0] for call in runner.calls] == [["/opt/opencode", "--version"]]
+    assert caps.installed is True
+    assert caps.authenticated is None
+    assert caps.ready is False
 
 
 def test_deepseek_without_billing_runs_no_probes_or_mutations(tmp_path: Path) -> None:

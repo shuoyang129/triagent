@@ -26,9 +26,11 @@ class AgentCapabilities(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     available: bool
+    installed: bool | None = None
     version: str | None = None
-    authenticated: bool = False
+    authenticated: bool | None = False
     headless: bool = False
+    ready: bool | None = None
 
 
 class AgentRequest(BaseModel):

@@ -8,20 +8,18 @@ from triagent.adapters.process import ProcessRunner
 
 
 class AntigravityAdapter(AgentAdapter):
-    def __init__(self, runner: ProcessRunner | None = None, secret_values: Sequence[str] = ()) -> None:
+    def __init__(self, runner: ProcessRunner | None = None, secret_values: Sequence[str] = (), command: Sequence[str] = ("agy.exe",)) -> None:
         default_runner, self._env, self._secrets = runtime(("AGY_API_KEY", "GOOGLE_API_KEY"), secret_values)
         self._runner = runner or default_runner
+        self._command = list(command)
 
     def capabilities(self) -> AgentCapabilities:
-        installed, version = probe(self._runner, ["agy.exe", "--version"], self._env)
-        authenticated = False
-        if installed:
-            authenticated, _ = probe(self._runner, ["agy.exe", "auth", "status"], self._env)
-        return AgentCapabilities(available=installed and authenticated, version=version or None, authenticated=authenticated, headless=installed)
+        installed, version = probe(self._runner, [*self._command, "--version"], self._env)
+        return AgentCapabilities(available=False, installed=installed, version=version or None, authenticated=None, headless=installed, ready=None)
 
     def run(self, request: AgentRequest) -> AgentResult:
         prompt, error = read_prompt(request)
         if error:
             return error
         assert prompt is not None
-        return invoke_json(self._runner, ["agy.exe", "--print", "--json", prompt], request.workdir, request.timeout_seconds, self._env, self._secrets)
+        return invoke_json(self._runner, [*self._command, "--print", "--json", prompt], request.workdir, request.timeout_seconds, self._env, self._secrets)

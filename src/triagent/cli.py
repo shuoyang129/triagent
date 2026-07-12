@@ -51,6 +51,19 @@ def _values(state: str, *, complete: bool = False) -> dict[str, str]:
     }
 
 
+def _profile_command(config: dict, name: str) -> list[str]:
+    value = config.get("agents", {}).get(name, {}).get("command")
+    if not isinstance(value, list) or not value or not all(isinstance(part, str) and part for part in value):
+        raise typer.BadParameter(f"Profile agent {name!r} requires a non-empty command array")
+    return value
+
+
+def _status(value: bool | None) -> str:
+    if value is None:
+        return "unknown"
+    return "yes" if value else "no"
+
+
 @app.command()
 def create(repo: Path, goal: str, data_root: DataRoot = None) -> None:
     task = TaskStore(_root(data_root)).create_task(_spec(repo, goal))
@@ -113,18 +126,18 @@ def doctor(profile: Annotated[str, typer.Option()] = "fake") -> None:
 
     opencode_enabled = bool(config.get("agents", {}).get("opencode", {}).get("enabled", False))
     probes = (
-        ("codex", CodexAdapter()),
-        ("cursor", CursorAdapter(deepseek_billing_confirmed=False)),
-        ("antigravity", AntigravityAdapter()),
-        ("opencode/deepseek", DeepSeekAdapter(enabled=opencode_enabled, billing_confirmed=False)),
+        ("codex", CodexAdapter(command=_profile_command(config, "codex"))),
+        ("cursor", CursorAdapter(command=_profile_command(config, "cursor"), deepseek_billing_confirmed=False)),
+        ("antigravity", AntigravityAdapter(command=_profile_command(config, "antigravity"))),
+        ("opencode/deepseek", DeepSeekAdapter(command=_profile_command(config, "opencode"), enabled=opencode_enabled, billing_confirmed=False, probe_installed=True)),
     )
     typer.echo(f"Profile: {profile_path}")
     for name, adapter in probes:
         capability = adapter.capabilities()
         typer.echo(
-            f"{name}: available={'yes' if capability.available else 'no'} "
-            f"authenticated={'yes' if capability.authenticated else 'no'} "
-            f"headless={'yes' if capability.headless else 'no'}"
+            f"{name}: installed={_status(capability.installed)} "
+            f"authenticated={_status(capability.authenticated)} "
+            f"ready={_status(capability.ready)}"
         )
 
 

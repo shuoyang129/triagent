@@ -108,37 +108,60 @@ def test_create_status_approve_report_and_doctor_are_operator_readable(tmp_path:
 
 def test_doctor_profile_lists_safe_vendor_capability_summaries(monkeypatch, tmp_path: Path) -> None:
     profile = tmp_path / "profile.toml"
-    profile.write_text("[agents.opencode]\nenabled = false\n", encoding="utf-8")
+    profile.write_text(
+        """
+[agents.codex]
+command = ["custom-codex"]
+[agents.cursor]
+command = ["custom-cursor"]
+[agents.antigravity]
+command = ["custom-agy"]
+[agents.opencode]
+enabled = false
+command = ["custom-opencode"]
+""".strip(),
+        encoding="utf-8",
+    )
     calls: list[str] = []
+    commands: dict[str, list[str]] = {}
 
-    def adapter(name: str, *, available: bool, authenticated: bool):
+    def adapter(name: str, *, installed: bool, authenticated: bool | None, ready: bool | None):
         class Stub:
-            def __init__(self, *args, **kwargs):
-                pass
+            def __init__(self, *args, command, **kwargs):
+                commands[name] = list(command)
+                if name == "opencode/deepseek":
+                    assert kwargs["probe_installed"] is True
 
             def capabilities(self):
                 calls.append(name)
                 return SimpleNamespace(
-                    available=available,
+                    installed=installed,
                     authenticated=authenticated,
-                    headless=True,
-                    version=f"{name}-version",
+                    ready=ready,
                 )
 
         return Stub
 
-    monkeypatch.setattr(cli_module, "CodexAdapter", adapter("codex", available=True, authenticated=True))
-    monkeypatch.setattr(cli_module, "CursorAdapter", adapter("cursor", available=False, authenticated=False))
-    monkeypatch.setattr(cli_module, "AntigravityAdapter", adapter("antigravity", available=True, authenticated=True))
-    monkeypatch.setattr(cli_module, "DeepSeekAdapter", adapter("opencode/deepseek", available=False, authenticated=False))
+    monkeypatch.setattr(cli_module, "CodexAdapter", adapter("codex", installed=True, authenticated=True, ready=True))
+    monkeypatch.setattr(cli_module, "CursorAdapter", adapter("cursor", installed=False, authenticated=False, ready=False))
+    monkeypatch.setattr(cli_module, "AntigravityAdapter", adapter("antigravity", installed=True, authenticated=None, ready=None))
+    monkeypatch.setattr(cli_module, "DeepSeekAdapter", adapter("opencode/deepseek", installed=None, authenticated=None, ready=False))
 
     result = runner.invoke(app, ["doctor", "--profile", str(profile)])
 
     assert result.exit_code == 0, result.output
     assert calls == ["codex", "cursor", "antigravity", "opencode/deepseek"]
+    assert commands == {
+        "codex": ["custom-codex"],
+        "cursor": ["custom-cursor"],
+        "antigravity": ["custom-agy"],
+        "opencode/deepseek": ["custom-opencode"],
+    }
     for name in calls:
         assert name in result.output.lower()
-    assert "available=yes" in result.output.lower()
-    assert "available=no" in result.output.lower()
+    assert "installed=yes" in result.output.lower()
+    assert "installed=no" in result.output.lower()
     assert "authenticated=yes" in result.output.lower()
+    assert "authenticated=unknown" in result.output.lower()
+    assert "ready=unknown" in result.output.lower()
     assert "credential" not in result.output.lower()

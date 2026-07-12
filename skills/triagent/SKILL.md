@@ -10,10 +10,12 @@ Use only the `triagent` operator CLI. Never construct or invoke vendor-agent com
 ## Workflow
 
 1. Diagnose the selected profile before running work.
-2. Create a task for inspection, or run it in the configured isolated workspace.
+2. Create a task for inspection. Run only with the currently executable `fake` profile.
 3. Inspect status and the rendered report.
 4. In outcome approval mode, present the user outcome, tests, independent review, visual artifacts, residual risk, rollback, and pending approval.
 5. Run approval only after the operator explicitly chooses the named approval action.
+
+Non-fake profiles are diagnostic-only until Phase B. Use `triagent doctor` plus the onsite checklist; do not claim a Windows or DGX profile can run tasks yet.
 
 ```shell
 triagent doctor --profile profiles/windows.example.toml
