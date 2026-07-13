@@ -213,6 +213,5 @@ class Orchestrator:
             return TaskState.APPROVAL
         if task.state is TaskState.APPROVAL and action in {"outcome", "merge", "deploy", "destructive", "prune-branch", "live", "billing"}:
             self.store.approve_requested(task_id, action)
-            if action in {"outcome","merge","prune-branch"}:self.store.consume_approval(task_id,action)
             return task.state
         raise ValueError(f"approval {action!r} is invalid for state {task.state.value}")

@@ -17,6 +17,7 @@ from pathlib import PurePosixPath
 
 from triagent.domain import StageOutcome, TaskSpec, TaskState
 from triagent.run_layout import RunLayout
+from triagent.git_runner import run_git
 
 
 class StateConflict(RuntimeError):
@@ -25,8 +26,9 @@ class StateConflict(RuntimeError):
 class BudgetExceeded(RuntimeError): pass
 class LeaseConflict(RuntimeError): pass
 
-_CREDENTIAL_PATH=re.compile(r"(?i)(?:^|/)(?:\.env(?:\..*)?|\.npmrc|id_[^/]+|auth[^/]*|credentials?[^/]*|secrets?[^/]*)$|(?:^|[._-])(?:credentials?|secrets?|passwords?|tokens?|api[_-]?keys?|auth)(?:[._-]|$)|\.(?:pem|key)$")
-_CREDENTIAL_CONTENT=re.compile(r"(?is)(?:api[_-]?key|access[_-]?key|client[_-]?secret|auth[_-]?token|token|password|secret|authorization|credential|_authToken)\s*['\"]?\s*[:=]\s*['\"]?(?:bearer\s+)?[^\s,'\"}]{12,}|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\bbearer\s+[A-Za-z0-9._~+/=-]{12,}|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+_CREDENTIAL_PATH=re.compile(r"(?i)(?:^|/)(?:\.env(?:\..*)?|\.npmrc|\.pypirc|\.yarnrc(?:\.yml)?|id_[^/]+|auth[^/]*|credentials?[^/]*|secrets?[^/]*|\.docker/config\.json|\.config/containers/auth\.json|\.aws/credentials|\.config/gcloud/.*|\.azure/.*|\.cargo/credentials(?:\.toml)?)$|(?:^|[._-])(?:credentials?|secrets?|passwords?|tokens?|api[_-]?keys?|auth)(?:[._-]|$)|\.(?:pem|key)$")
+_CREDENTIAL_CONTENT=re.compile(r"(?is)(?:api[_-]?key|access[_-]?key|client[_-]?secret|auths?|auth[_-]?token|basic[_-]?auth|registry[_-]?auth|token|password|secret|authorization|credential|_authToken)\s*['\"]?\s*[:=]\s*['\"]?(?:basic\s+|bearer\s+)?[^\s,'\"}]{12,}|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\b(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]{12,}|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+_STRUCTURED_AUTH_FIELD=re.compile(r"(?im)(?:^|[,{\s])['\"]?(?:auths?|basic[_-]?auth|registry[_-]?auth)['\"]?\s*[:=]")
 _SAFE_RASTER_SUFFIXES={".png"}
 _TEXT_LIMIT=1024*1024
 _RASTER_LIMIT=10*1024*1024
@@ -40,7 +42,7 @@ def _safe_raster(data:bytes,suffix:str)->bool:
     suffix=suffix.lower()
     if suffix==".png":
         if not data.startswith(b"\x89PNG\r\n\x1a\n"):return False
-        offset=8; width=height=None; idat=[]; seen_ihdr=False; seen_iend=False; bits=color=None; seen_idat=False
+        offset=8; width=height=None; idat=[]; seen_ihdr=False; seen_iend=False; bits=color=None; seen_idat=False; idat_ended=False
         while offset+12<=len(data):
             length=struct.unpack(">I",data[offset:offset+4])[0]; kind=data[offset+4:offset+8]; end=offset+12+length
             if length>_RASTER_LIMIT or end>len(data):return False
@@ -53,13 +55,15 @@ def _safe_raster(data:bytes,suffix:str)->bool:
                 if bits!=8 or color not in {2,6} or compression!=0 or filter_method!=0 or interlace!=0:return False
                 seen_ihdr=True
             elif kind==b"IDAT":
-                if not seen_ihdr:return False
+                if not seen_ihdr or idat_ended:return False
                 seen_idat=True; idat.append(payload)
             elif kind==b"IEND":
                 if length!=0 or not seen_idat:return False
                 seen_iend=True; offset=end; break
             elif kind[0]&32==0:
                 return False
+            elif seen_idat:
+                idat_ended=True
             offset=end
         if not (seen_ihdr and seen_iend and idat and offset==len(data) and width and height and bits is not None and color is not None):return False
         channels={2:3,6:4}[color]; row_bytes=width*channels; expected=height*(1+row_bytes)
@@ -269,12 +273,11 @@ class TaskStore:
 
     @staticmethod
     def _git_plumbing(work:Path,args:list[str],stdin:bytes|None=None)->bytes:
-        environment={name:os.environ[name] for name in ("PATH","SYSTEMROOT","WINDIR","COMSPEC","PATHEXT","TEMP","TMP","HOME","USERPROFILE") if os.environ.get(name)}
-        environment.update({"GIT_CONFIG_NOSYSTEM":"1","GIT_CONFIG_GLOBAL":os.devnull,"GIT_ATTR_NOSYSTEM":"1","GIT_AUTHOR_NAME":"TriAgent Controller","GIT_AUTHOR_EMAIL":"triagent@localhost","GIT_COMMITTER_NAME":"TriAgent Controller","GIT_COMMITTER_EMAIL":"triagent@localhost"})
-        if args and args[0]=="diff":
-            args=["diff","--no-ext-diff","--no-textconv",*args[1:]]
-        command=["git","-c",f"core.hooksPath={os.devnull}","-c","commit.gpgSign=false","-c","diff.external=","-c","diff.algorithm=myers",*args]
-        return subprocess.run(command,cwd=work,env=environment,input=stdin,check=True,capture_output=True).stdout
+        environment={
+            "GIT_AUTHOR_NAME":"TriAgent Controller","GIT_AUTHOR_EMAIL":"triagent@localhost",
+            "GIT_COMMITTER_NAME":"TriAgent Controller","GIT_COMMITTER_EMAIL":"triagent@localhost",
+        }
+        return run_git(work,args,stdin=stdin,extra_env=environment).stdout
 
     def _candidate_manifest(self,task_id:str,work:Path,base:str,changed_paths:list[str]|None=None)->dict[str,tuple[str,str,bytes]]:
         try:
@@ -288,8 +291,19 @@ class TaskStore:
             if kind!="blob" or mode not in {"100644","100755"}:raise ValueError("candidate manifest rejected")
             base_entries[name.decode("utf-8")]=(mode,kind,oid)
         try:
+            control_basenames={".gitignore",".gitattributes",".gitmodules"}
+            base_controls={name for name in base_entries if PurePosixPath(name).name in control_basenames}
+            current_controls=set()
+            for root,dirs,files in os.walk(work,topdown=True,followlinks=False):
+                dirs[:]=[name for name in dirs if name!=".git"]
+                for filename in files:
+                    if filename in control_basenames:current_controls.add((Path(root)/filename).relative_to(work).as_posix())
+            if current_controls!=base_controls:raise ValueError("candidate manifest rejected")
+            for name in base_controls:
+                current=(work/name).read_bytes();original=self._git_plumbing(work,["cat-file","blob",base_entries[name][2]])
+                if current.replace(b"\r\n",b"\n")!=original.replace(b"\r\n",b"\n"):raise ValueError("candidate manifest rejected")
             tracked=set(filter(None,self._git_plumbing(work,["ls-files","--cached","-z"]).decode("utf-8").split("\0")))
-            untracked=set(filter(None,self._git_plumbing(work,["ls-files","--others","--exclude-standard","-z"]).decode("utf-8").split("\0")))
+            untracked=set(filter(None,self._git_plumbing(work,["ls-files","--others","--exclude-per-directory=.gitignore","-z"]).decode("utf-8").split("\0")))
             tracked_changes=set()
             for name in set(base_entries)|tracked:
                 target=work/name; base_entry=base_entries.get(name)
@@ -324,7 +338,7 @@ class TaskStore:
                 try:total_bytes+=target.stat().st_size
                 except OSError as error:raise ValueError("candidate manifest rejected") from error
                 if total_bytes>_MAX_CHANGED_BYTES:raise ValueError("candidate limits exceeded")
-        control_names={name for name in actual_changes if PurePosixPath(name).name in {".gitignore",".gitattributes",".gitmodules"}}
+        control_names={name for name in actual_changes if PurePosixPath(name).name in control_basenames}
         if control_names:raise ValueError("candidate manifest rejected")
         manifest={}
         try:
@@ -356,7 +370,7 @@ class TaskStore:
                     if len(data)>_TEXT_LIMIT or b"\0" in data:raise ValueError("candidate manifest rejected")
                     try:text=data.decode("utf-8")
                     except UnicodeDecodeError as error:raise ValueError("candidate manifest rejected") from error
-                    if _CREDENTIAL_CONTENT.search(text):raise ValueError("candidate manifest rejected")
+                    if _CREDENTIAL_CONTENT.search(text) or _STRUCTURED_AUTH_FIELD.search(text):raise ValueError("candidate manifest rejected")
                 base_mode=base_entries.get(relative,("100644",None,None))[0]
                 mode="100755" if base_mode=="100755" or (os.name!="nt" and info.st_mode&stat.S_IXUSR) else "100644"
                 manifest[relative]=(mode,"",data)
@@ -424,7 +438,9 @@ class TaskStore:
                 else:self._git_plumbing(work,["update-ref","-d",candidate_ref,reviewed])
                 if prior_ref:
                     if self._git_plumbing(work,["rev-parse","--verify",candidate_ref]).decode().strip()!=prior_ref:raise ValueError
-                elif subprocess.run(["git","rev-parse","--verify",candidate_ref],cwd=work,capture_output=True).returncode==0:raise ValueError
+                else:
+                    try:self._git_plumbing(work,["rev-parse","--verify",candidate_ref]);raise ValueError
+                    except subprocess.CalledProcessError:pass
             except Exception as error:raise ValueError("candidate rollback failed") from error
             raise ValueError("candidate persistence conflict")
         return reviewed
@@ -486,7 +502,7 @@ class TaskStore:
                 path=PurePosixPath(name)
                 if path.is_absolute() or "\\" in name or any(part in {"",".",".."} for part in path.parts) or path.suffix.lower() not in _SAFE_RASTER_SUFFIXES:continue
                 try:
-                    entry=subprocess.run(["git","ls-tree",reviewed,"--",name],cwd=work,check=True,capture_output=True,text=True).stdout.strip()
+                    entry=self._git_plumbing(work,["ls-tree",reviewed,"--",name]).decode("utf-8").strip()
                     if not entry or not entry.startswith(("100644 blob ","100755 blob ")):continue
                     data=self._git_plumbing(work,["show",f"{reviewed}:{name}"])
                 except (OSError,subprocess.CalledProcessError):continue

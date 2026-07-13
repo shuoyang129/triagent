@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from triagent.git_runner import run_git
+
 
 _TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -136,24 +138,17 @@ class GitWorkspace:
         record=store.approval_resource(task_id,"prune-branch") if store is not None and task_id is not None else None
         if store is None or task_id is None or task_id != self.task_id or not record or any(record.get(k)!=v for k,v in expected.items()) or not record.get("resource_version"):
             raise PermissionError("branch pruning requires durable prune-branch approval")
-        candidate=store.consume_approval(task_id,"prune-branch")
         if self.path.exists():
             raise RuntimeError("clean up the worktree before pruning its preservation branch")
+        candidate=store.consume_approval(task_id,"prune-branch")
         _git(self.repo, "branch", "-D", f"triagent/{self.task_id}")
         store.delete_candidate_ref(task_id,candidate)
 
 
 def _git(cwd: Path, *args: str) -> str:
     try:
-        result = subprocess.run(
-            ["git", *args],
-            cwd=cwd,
-            check=True,
-            capture_output=True,
-            text=True,
-            shell=False,
-        )
+        result = run_git(cwd,args)
     except (OSError, subprocess.CalledProcessError) as error:
         detail = getattr(error, "stderr", None) or str(error)
         raise RuntimeError(f"Git command failed: {detail.strip()}") from error
-    return result.stdout.strip()
+    return result.stdout.decode("utf-8").strip()
