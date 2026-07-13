@@ -28,4 +28,4 @@ class CodexAdapter(AgentAdapter):
     def run(self, request: AgentRequest) -> AgentResult:
         payload,error=read_prompt(request)
         if error:return error
-        return invoke_codex_jsonl(self._runner,[*self._command,"exec","--sandbox","workspace-write","--json","-"],request.workdir,request.timeout_seconds,self._env,self._secrets,request.role,stdin=payload)
+        return invoke_codex_jsonl(self._runner,[*self._command,"exec","--sandbox","workspace-write","-C",str(request.workdir),"--json","-"],request.workdir,request.timeout_seconds,self._env,self._secrets,request.role,stdin=payload)

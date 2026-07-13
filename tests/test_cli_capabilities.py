@@ -153,6 +153,7 @@ def test_codex_verification_uses_workspace_write_and_parses_jsonl_event_stream(a
     result = CodexAdapter(runner=runner).run(agent_request)
     argv = runner.calls[0][0]
     assert argv[:4] == ["codex.exe", "exec", "--sandbox", "workspace-write"]
+    assert argv[4:6] == ["-C", str(agent_request.workdir)]
     assert "--dangerously-bypass-approvals-and-sandbox" not in argv
     assert "--json" in argv
     assert result.status is AgentStatus.INVALID_OUTPUT
