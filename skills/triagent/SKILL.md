@@ -12,8 +12,9 @@ Use only the `triagent` operator CLI. Never construct or invoke vendor-agent com
 1. Diagnose the selected profile before running work.
 2. Create a task for inspection with an explicit `--risk`, one or more `--acceptance` criteria, and a declared `--visual-check`. Add repeatable `--forbidden` path exclusions when needed. Prefer the quota-free `fake` profile. A configured real profile requires both `--live-confirmed` and `--billing-confirmed`; never infer either confirmation.
 3. Inspect status and the rendered report.
-4. In outcome approval mode, present the user outcome, tests, independent review, visual artifacts, residual risk, rollback, and pending approval.
-5. Run approval only after the operator explicitly chooses the named approval action.
+4. Resume only with an explicit `--profile` that matches the task's immutable execution provenance. Never downgrade a live task to `fake`, substitute a different profile, or replace its selected implementer.
+5. In outcome approval mode, present the user outcome, tests, independent review, visual artifacts, residual risk, rollback, and pending approval.
+6. Run approval only after the operator explicitly chooses the named approval action.
 
 Non-fake real profiles cover only the local Phase A coding flow: Cursor implements (with DeepSeek/OpenCode as router fallback), Codex verifies, and Antigravity independently reviews. DGX/LAN/Isaac remains Phase B.
 

@@ -41,14 +41,14 @@ triagent create --risk low --acceptance "unit tests pass" --visual-check none C:
 triagent run --profile fake --risk low --acceptance "unit tests pass" --forbidden secrets\ --visual-check none C:\src\project "Add a health endpoint"
 ```
 
-Resume only an existing `FAILED_RECOVERABLE` task. The task ID is preserved, the persisted failed stage is retried, earlier passed stages are not repeated, and remaining repair/call/time/USD limits still apply.
+Resume only an existing `FAILED_RECOVERABLE` task and always pass `--profile` explicitly. The task ID is preserved, the persisted failed stage is retried, earlier passed stages are not repeated, and remaining repair/call/time/USD limits still apply. Every run persists immutable simulation/live provenance, the selected implementer, verifier, reviewer, and normalized profile digest before its first provider stage. Resume refuses missing or mismatched provenance, including live-to-fake downgrade and profile substitution. A DeepSeek-origin task resumes with DeepSeek rather than silently switching to Cursor.
 
 ```powershell
 triagent resume --profile fake TASK_ID
 triagent resume --profile profiles\windows.example.toml --live-confirmed --billing-confirmed TASK_ID
 ```
 
-Non-fake `run` and `resume` commands require both live and billing confirmation. Missing flags, profile commands, failed-stage evidence, or remaining budget fail closed.
+Non-fake `run` and `resume` commands require both live and billing confirmation. Missing flags, profile commands, failed-stage evidence, compatible provenance, or remaining budget fail closed before a provider call. Recoverable adapter failures—including unavailable executables, nonzero exits, timeouts, invalid output, and raised transport exceptions—persist their exact stage using sanitized controller diagnostics.
 
 ## Known first-phase boundary
 

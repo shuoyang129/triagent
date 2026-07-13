@@ -161,6 +161,7 @@ class TaskStore:
             connection.execute("CREATE TABLE IF NOT EXISTS approval_records_versions(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action,resource_json))")
             connection.execute("CREATE TABLE IF NOT EXISTS approval_requests_versions(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action,resource_json))")
             connection.execute("CREATE TABLE IF NOT EXISTS system_attestations(task_id TEXT NOT NULL, name TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(task_id,name))")
+            connection.execute("CREATE TABLE IF NOT EXISTS execution_provenance(task_id TEXT PRIMARY KEY, mode TEXT NOT NULL, implementer TEXT NOT NULL, verifier TEXT NOT NULL, reviewer TEXT NOT NULL, profile_digest TEXT NOT NULL)")
             connection.execute("CREATE TABLE IF NOT EXISTS attention_items(task_id TEXT NOT NULL, code TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(task_id,code))")
             connection.execute("CREATE TABLE IF NOT EXISTS consumed_actions(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, consumed_at TEXT NOT NULL, PRIMARY KEY(task_id,action))")
             for table in ("approval_records_versions","approval_requests_versions"):
@@ -314,6 +315,64 @@ class TaskStore:
         with self._connect() as connection: connection.execute("INSERT OR REPLACE INTO workspace_meta(task_id,repo,base_commit,branch,reviewed_commit,candidate_ref) VALUES(?,?,?,?,NULL,NULL)",(task_id,repo,base_commit,branch))
     def workspace(self, task_id: str):
         with self._connect() as connection: return connection.execute("SELECT * FROM workspace_meta WHERE task_id=?",(task_id,)).fetchone()
+
+    def record_execution_provenance(
+        self,
+        task_id: str,
+        *,
+        mode: str,
+        implementer: str,
+        verifier: str,
+        reviewer: str,
+        profile_digest: str,
+    ) -> None:
+        value = {
+            "mode": mode,
+            "implementer": implementer,
+            "verifier": verifier,
+            "reviewer": reviewer,
+            "profile_digest": profile_digest,
+        }
+        valid = (
+            mode in {"simulation", "live"}
+            and isinstance(profile_digest, str)
+            and 0 < len(profile_digest) <= 128
+            and (
+                (mode == "simulation" and (implementer, verifier, reviewer) == ("fake", "fake", "fake"))
+                or (
+                    mode == "live"
+                    and implementer in {"cursor", "deepseek"}
+                    and verifier == "codex"
+                    and reviewer == "antigravity"
+                )
+            )
+        )
+        if not valid:
+            raise ValueError("invalid execution provenance")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT mode,implementer,verifier,reviewer,profile_digest FROM execution_provenance WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+            if existing is not None:
+                if any(existing[key] != expected for key, expected in value.items()):
+                    raise ValueError("execution provenance is immutable")
+                return
+            if connection.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone() is None:
+                raise KeyError(task_id)
+            connection.execute(
+                "INSERT INTO execution_provenance(task_id,mode,implementer,verifier,reviewer,profile_digest) VALUES(?,?,?,?,?,?)",
+                (task_id, mode, implementer, verifier, reviewer, profile_digest),
+            )
+
+    def execution_provenance(self, task_id: str) -> dict[str, str] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT mode,implementer,verifier,reviewer,profile_digest FROM execution_provenance WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
 
     @staticmethod
     def _git_plumbing(work:Path,args:list[str],stdin:bytes|None=None)->bytes:

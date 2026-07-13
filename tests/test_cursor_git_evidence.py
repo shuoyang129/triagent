@@ -4,9 +4,9 @@ import json
 import subprocess
 from pathlib import Path
 
-from triagent.adapters.base import AgentResult, AgentStatus
+from triagent.adapters.antigravity import AntigravityAdapter
+from triagent.adapters.codex import CodexAdapter
 from triagent.adapters.cursor import CursorAdapter
-from triagent.adapters.fake import FakeAgent
 from triagent.adapters.process import ProcessResult
 from triagent.domain import Budget, TaskSpec, TaskState
 from triagent.git_workspace import GitWorkspace
@@ -38,6 +38,24 @@ class CursorRunner:
         return ProcessResult(0, json.dumps(envelope), "", False)
 
 
+class StageRunner:
+    def __init__(self, role: str) -> None:
+        self.role = role
+        self.inputs: list[str | None] = []
+
+    def run(self, argv, cwd, timeout, env_allowlist, stdin=None) -> ProcessResult:
+        self.inputs.append(stdin)
+        payload = {"status": "passed", "evidence": ["tests pass"], "artifacts": []}
+        if self.role == "review":
+            payload["findings"] = []
+            return ProcessResult(0, json.dumps(payload), "", False)
+        event = {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": json.dumps(payload)},
+        }
+        return ProcessResult(0, json.dumps(event), "", False)
+
+
 def setup_task(tmp_path: Path, *, edit: bool):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -60,20 +78,21 @@ def setup_task(tmp_path: Path, *, edit: bool):
     workspace = GitWorkspace.create(repo, task.id, destination=work)
     store.set_workspace(task.id, str(repo), workspace.base_commit, f"triagent/{task.id}")
 
-    verifier = FakeAgent([AgentResult(
-        status=AgentStatus.SUCCEEDED,
-        data={"status": "passed", "summary_code": "verified", "evidence": ["tests pass"], "artifacts": []},
-    )])
-    reviewer = FakeAgent([AgentResult(
-        status=AgentStatus.SUCCEEDED,
-        data={"status": "passed", "summary_code": "clean", "evidence": [], "artifacts": [], "findings": []},
-    )])
+    verifier = StageRunner("verify")
+    reviewer = StageRunner("review")
     cursor = CursorAdapter(
         runner=CursorRunner(edit),
         command=["cursor-agent"],
         estimated_usd=0.5,
     )
-    orchestrator = Orchestrator(store, cursor, verifier, reviewer)
+    orchestrator = Orchestrator(
+        store,
+        cursor,
+        CodexAdapter(runner=verifier, estimated_usd=0.5),
+        AntigravityAdapter(
+            runner=reviewer, estimated_usd=0.5, acl_verifier=lambda directory, file: True
+        ),
+    )
     return orchestrator, store, task, work, verifier, reviewer
 
 
@@ -111,8 +130,8 @@ def test_cursor_free_text_advances_on_git_derived_change(tmp_path: Path) -> None
         render_persisted_report(store, task.id),
     ])
     assert VENDOR_MARKER not in persisted_text
-    assert len(verifier.requests) == 1
-    assert len(reviewer.requests) == 1
+    assert len(verifier.inputs) == 1
+    assert len(reviewer.inputs) == 1
 
 
 def test_cursor_no_change_stops_before_verification(tmp_path: Path) -> None:
@@ -124,5 +143,5 @@ def test_cursor_no_change_stops_before_verification(tmp_path: Path) -> None:
     outcome = store.outcomes(task.id)["implement"]
     assert outcome.status == "failed"
     assert outcome.diagnostic == "cursor-no-worktree-change"
-    assert verifier.requests == []
-    assert reviewer.requests == []
+    assert verifier.inputs == []
+    assert reviewer.inputs == []

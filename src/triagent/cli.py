@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import math
+import hashlib
+import json
 import tomllib
 from pathlib import Path
 from typing import Annotated, Literal
@@ -78,6 +80,18 @@ def _fallback_profile(config:dict)->tuple[str,bool]:
     return name,agents.get(name,{}).get("enabled") is True
 
 
+def _profile_digest(config: dict) -> str:
+    normalized = json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _require_provenance(store: TaskStore, task_id: str, expected: dict[str, str]) -> dict[str, str]:
+    persisted = store.execution_provenance(task_id)
+    if persisted is None or persisted != expected:
+        raise ValueError("execution provenance unavailable or incompatible")
+    return persisted
+
+
 def _status(value: bool | None) -> str:
     if value is None:
         return "unknown"
@@ -141,7 +155,7 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
         if profile == "fake":
             success = AgentResult(status=AgentStatus.SUCCEEDED, data={"status":"passed","summary_code":"completed","evidence":[]})
             (run_worktree/"health-endpoint.txt").write_text("ok\n",encoding="utf-8")
-            orchestrator = Orchestrator(store, FakeAgent([success]), FakeAgent([success]), FakeAgent([success]))
+            orchestrator = Orchestrator(store, FakeAgent([success]), FakeAgent([success]), FakeAgent([success]), profile_digest="fake-v1")
         else:
             assert config is not None
             cursor = CursorAdapter(command=_profile_command(config, "cursor"), deepseek_billing_confirmed=False, estimated_usd=_priced(config,"cursor"))
@@ -154,7 +168,10 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
                 deepseek_caps=store.execute_paid_operation(task.id,probe_cost,deepseek.capabilities)
                 capabilities["deepseek"]=deepseek_caps
             choice = ImplementationRouter().choose(cursor_usage=0.0, capabilities=capabilities)
-            orchestrator = Orchestrator(store, cursor if choice.name == "cursor" else deepseek, codex, antigravity)
+            orchestrator = Orchestrator(
+                store, cursor if choice.name == "cursor" else deepseek, codex, antigravity,
+                profile_digest=_profile_digest(config),
+            )
         state = orchestrator.run_until_blocked(task.id)
     except Exception as error:
         preserved=[]
@@ -169,7 +186,7 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
 @app.command()
 def resume(
     task_id: str,
-    profile: Annotated[str, typer.Option()] = "fake",
+    profile: Annotated[str, typer.Option()],
     data_root: DataRoot = None,
     live_confirmed: Annotated[bool, typer.Option("--live-confirmed")] = False,
     billing_confirmed: Annotated[bool, typer.Option("--billing-confirmed")] = False,
@@ -180,24 +197,56 @@ def resume(
     try:
         store.load(task_id)
         if profile == "fake":
+            expected = {
+                "mode": "simulation", "implementer": "fake", "verifier": "fake",
+                "reviewer": "fake", "profile_digest": "fake-v1",
+            }
+            _require_provenance(store, task_id, expected)
             success = AgentResult(
                 status=AgentStatus.SUCCEEDED,
                 data={"status": "passed", "summary_code": "completed", "evidence": []},
             )
             orchestrator = Orchestrator(
-                store, FakeAgent([success]), FakeAgent([success]), FakeAgent([success])
+                store, FakeAgent([success]), FakeAgent([success]), FakeAgent([success]),
+                profile_digest="fake-v1",
             )
         else:
             config = tomllib.loads(Path(profile).read_text(encoding="utf-8"))
-            for agent in ("cursor", "codex", "antigravity"):
+            digest = _profile_digest(config)
+            persisted = store.execution_provenance(task_id)
+            if persisted is None or persisted.get("mode") != "live":
+                raise ValueError("live execution provenance unavailable")
+            expected = {
+                "mode": "live", "implementer": persisted["implementer"],
+                "verifier": "codex", "reviewer": "antigravity",
+                "profile_digest": digest,
+            }
+            _require_provenance(store, task_id, expected)
+            for agent in ("codex", "antigravity"):
                 _profile_command(config, agent)
-            orchestrator = Orchestrator(
-                store,
-                CursorAdapter(
+            if persisted["implementer"] == "cursor":
+                implementer = CursorAdapter(
                     command=_profile_command(config, "cursor"),
                     deepseek_billing_confirmed=False,
                     estimated_usd=_priced(config, "cursor"),
-                ),
+                )
+            elif persisted["implementer"] == "deepseek":
+                fallback_name, fallback_enabled = _fallback_profile(config)
+                if not fallback_enabled:
+                    raise ValueError("persisted DeepSeek implementer is unavailable")
+                fallback_estimate = _priced(config, fallback_name)
+                if fallback_estimate is None or fallback_estimate <= 0:
+                    raise ValueError("invalid fallback cost estimate")
+                implementer = DeepSeekAdapter(
+                    command=_profile_command(config, fallback_name), enabled=True,
+                    billing_confirmed=billing_confirmed, live_confirmed=live_confirmed,
+                    estimated_usd=fallback_estimate,
+                )
+            else:
+                raise ValueError("persisted implementer is unavailable")
+            orchestrator = Orchestrator(
+                store,
+                implementer,
                 CodexAdapter(
                     command=_profile_command(config, "codex"),
                     estimated_usd=_priced(config, "codex"),
@@ -206,6 +255,7 @@ def resume(
                     command=_profile_command(config, "antigravity"),
                     estimated_usd=_priced(config, "antigravity"),
                 ),
+                profile_digest=digest,
             )
             store.record_attestation(task_id, "live-confirmed", True)
             store.record_attestation(task_id, "billing-confirmed", True)

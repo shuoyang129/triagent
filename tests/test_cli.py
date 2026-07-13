@@ -1,5 +1,6 @@
 from pathlib import Path
 import subprocess
+import tomllib
 from types import SimpleNamespace
 
 from typer.testing import CliRunner
@@ -71,6 +72,10 @@ def test_resume_cli_preserves_task_id_and_reaches_approval(tmp_path: Path) -> No
     store.record_outcome(task.id, StageOutcome(
         stage="implement", status="failed", summary="requires-repair"
     ))
+    store.record_execution_provenance(
+        task.id, mode="simulation", implementer="fake", verifier="fake",
+        reviewer="fake", profile_digest="fake-v1",
+    )
     store.transition(task.id, TaskState.SPEC, TaskState.FAILED_RECOVERABLE, "test")
 
     result = runner.invoke(app, [
@@ -81,6 +86,130 @@ def test_resume_cli_preserves_task_id_and_reaches_approval(tmp_path: Path) -> No
     assert f"Task: {task.id}" in result.output
     assert "State: APPROVAL" in result.output
     assert store.runtime(task.id).repair_attempts == 1
+
+
+def test_resume_requires_explicit_profile_and_rejects_live_to_fake_downgrade(
+    tmp_path: Path, monkeypatch
+) -> None:
+    data = tmp_path / "data"
+    store = TaskStore(data)
+    task = store.create_task(TaskSpec(
+        goal="goal", scope=[str(tmp_path)], acceptance=["tests pass"]
+    ))
+    store.record_outcome(task.id, StageOutcome(
+        stage="verify", status="failed", summary="requires-repair"
+    ))
+    store.record_execution_provenance(
+        task.id, mode="live", implementer="cursor", verifier="codex",
+        reviewer="antigravity", profile_digest="live-profile-a",
+    )
+    store.transition(task.id, TaskState.SPEC, TaskState.FAILED_RECOVERABLE, "test")
+    monkeypatch.setattr(
+        cli_module, "FakeAgent",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fake adapter constructed")),
+    )
+
+    missing_profile = runner.invoke(app, ["resume", "--data-root", str(data), task.id])
+    downgrade = runner.invoke(app, [
+        "resume", "--profile", "fake", "--data-root", str(data), task.id
+    ])
+
+    assert missing_profile.exit_code != 0
+    assert downgrade.exit_code != 0
+    assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
+    assert store.runtime(task.id).repair_attempts == 0
+
+
+def _live_profile(path: Path, *, cursor_command: str = "cursor", deepseek: bool = False) -> dict:
+    path.write_text(f'''\
+[agents.cursor]
+command=["{cursor_command}"]
+estimated_usd=0.5
+[agents.codex]
+command=["codex"]
+estimated_usd=0.5
+[agents.antigravity]
+command=["agy"]
+estimated_usd=0.5
+[agents.deepseek]
+enabled={str(deepseek).lower()}
+command=["deepseek"]
+estimated_usd=0.5
+probe_estimated_usd=0.25
+''', encoding="utf-8")
+    return tomllib.loads(path.read_text(encoding="utf-8"))
+
+
+def test_resume_rejects_mismatched_live_profile_before_adapter_construction(
+    tmp_path: Path, monkeypatch
+) -> None:
+    data = tmp_path / "data"
+    profile_a = tmp_path / "a.toml"
+    profile_b = tmp_path / "b.toml"
+    config_a = _live_profile(profile_a, cursor_command="cursor-a")
+    _live_profile(profile_b, cursor_command="cursor-b")
+    store = TaskStore(data)
+    task = store.create_task(TaskSpec(goal="goal", scope=[str(tmp_path)], acceptance=["x"]))
+    store.record_outcome(task.id, StageOutcome(
+        stage="verify", status="failed", summary="requires-repair"
+    ))
+    store.record_execution_provenance(
+        task.id, mode="live", implementer="cursor", verifier="codex",
+        reviewer="antigravity", profile_digest=cli_module._profile_digest(config_a),
+    )
+    store.transition(task.id, TaskState.SPEC, TaskState.FAILED_RECOVERABLE, "test")
+    monkeypatch.setattr(
+        cli_module, "CursorAdapter",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("adapter constructed")),
+    )
+
+    result = runner.invoke(app, [
+        "resume", "--profile", str(profile_b), "--live-confirmed", "--billing-confirmed",
+        "--data-root", str(data), task.id,
+    ])
+
+    assert result.exit_code != 0
+    assert store.runtime(task.id).repair_attempts == 0
+
+
+def test_deepseek_origin_resume_reconstructs_deepseek_not_cursor(tmp_path: Path, monkeypatch) -> None:
+    data = tmp_path / "data"
+    profile = tmp_path / "deepseek.toml"
+    config = _live_profile(profile, deepseek=True)
+    store = TaskStore(data)
+    task = store.create_task(TaskSpec(goal="goal", scope=[str(tmp_path)], acceptance=["x"]))
+    store.record_outcome(task.id, StageOutcome(
+        stage="implement", status="failed", summary="requires-repair"
+    ))
+    store.record_execution_provenance(
+        task.id, mode="live", implementer="deepseek", verifier="codex",
+        reviewer="antigravity", profile_digest=cli_module._profile_digest(config),
+    )
+    store.transition(task.id, TaskState.SPEC, TaskState.FAILED_RECOVERABLE, "test")
+    constructed: list[str] = []
+    monkeypatch.setattr(
+        cli_module, "CursorAdapter",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Cursor substituted")),
+    )
+    monkeypatch.setattr(
+        cli_module, "DeepSeekAdapter",
+        lambda *args, **kwargs: constructed.append("deepseek") or object(),
+    )
+    monkeypatch.setattr(cli_module, "CodexAdapter", lambda *args, **kwargs: object())
+    monkeypatch.setattr(cli_module, "AntigravityAdapter", lambda *args, **kwargs: object())
+
+    class StubOrchestrator:
+        def __init__(self, *args, **kwargs): pass
+        def resume_until_blocked(self, task_id): return TaskState.APPROVAL
+
+    monkeypatch.setattr(cli_module, "Orchestrator", StubOrchestrator)
+    result = runner.invoke(app, [
+        "resume", "--profile", str(profile), "--live-confirmed", "--billing-confirmed",
+        "--data-root", str(data), task.id,
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert constructed == ["deepseek"]
 
 
 def test_resume_cli_real_profile_requires_gates_and_available_configuration(tmp_path: Path) -> None:

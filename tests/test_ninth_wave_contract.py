@@ -124,6 +124,77 @@ def test_verify_failure_resumes_with_codex_without_second_cursor_call(tmp_path):
     assert store.runtime(task.id).repair_attempts == 1
 
 
+class FailingCodexRunner:
+    def __init__(self, shape: str):
+        self.shape = shape
+        self.inputs = []
+
+    def run(self, argv, cwd, timeout, env, stdin=None):
+        self.inputs.append(stdin)
+        if self.shape == "unavailable":
+            raise FileNotFoundError("vendor path must not persist")
+        if self.shape == "exception":
+            raise RuntimeError("vendor secret text must not persist")
+        if self.shape == "timeout":
+            return ProcessResult(None, "vendor timeout text", "", True)
+        if self.shape == "invalid":
+            return ProcessResult(0, "not-json vendor secret text", "", False)
+        raise AssertionError(self.shape)
+
+
+@pytest.mark.parametrize("shape", ["unavailable", "timeout", "invalid", "exception"])
+def test_transport_verify_failure_persists_stage_and_resumes_at_codex(tmp_path, shape):
+    store, task, work, _ = workspace_store(tmp_path)
+
+    class ImplementRunner(StageRunner):
+        def run(self, argv, cwd, timeout, env, stdin=None):
+            (Path(cwd) / "candidate.txt").write_text("candidate", encoding="utf-8")
+            return super().run(argv, cwd, timeout, env, stdin)
+
+    cursor_output = ProcessResult(0, json.dumps({
+        "type": "result", "subtype": "success", "is_error": False,
+        "result": json.dumps(strict(AgentRole.IMPLEMENTER)), "total_cost_usd": .1,
+    }), "", False)
+    initial_cursor = ImplementRunner(cursor_output)
+    failing_codex = FailingCodexRunner(shape)
+    initial = Orchestrator(
+        store,
+        CursorAdapter(runner=initial_cursor, estimated_usd=.5),
+        CodexAdapter(runner=failing_codex, estimated_usd=.5),
+        AntigravityAdapter(
+            runner=StageRunner(ProcessResult(0, "{}", "", False)),
+            estimated_usd=.5, acl_verifier=lambda d, f: True,
+        ),
+    )
+
+    assert initial.run_until_blocked(task.id) is TaskState.FAILED_RECOVERABLE
+    outcome = store.outcomes(task.id)["verify"]
+    assert outcome.status == "failed"
+    assert "vendor" not in (outcome.diagnostic or "").lower()
+
+    resume_cursor = StageRunner(cursor_output)
+    resumed_codex = StageRunner(ProcessResult(0, json.dumps({
+        "type": "item.completed",
+        "item": {"type": "agent_message", "text": json.dumps(strict(AgentRole.VERIFIER))},
+    }), "", False))
+    resumed_review = StageRunner(ProcessResult(
+        0, json.dumps(strict(AgentRole.REVIEWER) | {"actual_usd": .1}), "", False
+    ))
+    resumed = Orchestrator(
+        store,
+        CursorAdapter(runner=resume_cursor, estimated_usd=.5),
+        CodexAdapter(runner=resumed_codex, estimated_usd=.5),
+        AntigravityAdapter(
+            runner=resumed_review, estimated_usd=.5, acl_verifier=lambda d, f: True
+        ),
+    )
+
+    assert resumed.resume_until_blocked(task.id) is TaskState.APPROVAL
+    assert resume_cursor.inputs == []
+    assert len(resumed_codex.inputs) == 1
+    assert len(resumed_review.inputs) == 1
+
+
 def test_resume_rejects_invalid_state_missing_outcome_and_exhausted_limits(tmp_path):
     cases = []
     for name in ("invalid", "missing", "repairs", "budget"):
@@ -134,6 +205,10 @@ def test_resume_rejects_invalid_state_missing_outcome_and_exhausted_limits(tmp_p
             goal="x", scope=[str(root)], acceptance=["x"],
             budget=Budget(max_agent_calls=max_calls, max_usd=0),
         ))
+        store.record_execution_provenance(
+            task.id, mode="simulation", implementer="fake", verifier="fake",
+            reviewer="fake", profile_digest="fake-v1",
+        )
         if name != "invalid":
             store.transition(task.id, TaskState.SPEC, TaskState.FAILED_RECOVERABLE, "test")
         if name in {"repairs", "budget"}:

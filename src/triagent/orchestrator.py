@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import uuid
 import json
+import hashlib
 
 from triagent.adapters.base import AgentAdapter, AgentRequest, AgentRole, AgentStatus
 from triagent.domain import ReviewSeverity, RiskLevel, StageOutcome, TaskState
@@ -46,12 +47,56 @@ class Orchestrator:
         implementer: AgentAdapter,
         verifier: AgentAdapter,
         reviewer: AgentAdapter,
+        profile_digest: str | None = None,
     ) -> None:
         self.store = store
         self.implementer = implementer
         self.verifier = verifier
         self.reviewer = reviewer
+        self.profile_digest = profile_digest
         self._lease_owner: str | None = None
+
+    def _execution_provenance(self) -> dict[str, str]:
+        implementer = _contract(self.implementer)[0]
+        verifier = _contract(self.verifier)[0]
+        reviewer = _contract(self.reviewer)[0]
+        identities = (implementer, verifier, reviewer)
+        if identities == ("fake", "fake", "fake"):
+            mode = "simulation"
+            digest = self.profile_digest or "fake-v1"
+        elif implementer in {"cursor", "deepseek"} and identities[1:] == ("codex", "antigravity"):
+            mode = "live"
+            digest = self.profile_digest or hashlib.sha256(
+                ("direct:" + ":".join(identities)).encode("utf-8")
+            ).hexdigest()
+        else:
+            raise ValueError("adapter pipeline has no valid execution provenance")
+        return {
+            "mode": mode,
+            "implementer": implementer,
+            "verifier": verifier,
+            "reviewer": reviewer,
+            "profile_digest": digest,
+        }
+
+    @staticmethod
+    def _failed_stage(role: AgentRole) -> str:
+        return {
+            AgentRole.IMPLEMENTER: "implement",
+            AgentRole.VERIFIER: "verify",
+            AgentRole.REVIEWER: "review",
+        }[role]
+
+    def _record_transport_failure(self, task_id: str, role: AgentRole, diagnostic: str) -> None:
+        self.store.record_outcome(
+            task_id,
+            StageOutcome(
+                stage=self._failed_stage(role),
+                status="failed",
+                summary="requires-repair",
+                diagnostic=diagnostic,
+            ),
+        )
 
     def _request(self, task_id: str, role: AgentRole, schema: str, adapter: AgentAdapter) -> AgentRequest:
         run_dir = self.store.runs_root / task_id
@@ -80,8 +125,12 @@ class Orchestrator:
             self.store.transition(task_id, state, TaskState.PAUSED_BUDGET, "agent-call-budget-exhausted")
             return None
         try: result = adapter.run(request)
-        except BaseException as error:
-            self.store.interrupt_agent_call(task_id, call_id, type(error).__name__); raise
+        except BaseException:
+            diagnostic = "adapter-exception"
+            self.store.interrupt_agent_call(task_id, call_id, diagnostic)
+            self._record_transport_failure(task_id, request.role, diagnostic)
+            self.store.transition(task_id, state, TaskState.FAILED_RECOVERABLE, diagnostic)
+            return None
         if self._lease_owner: self.store.renew_lease(task_id, self._lease_owner, 600)
         actual = 0.0 if estimate.zero_cost_enforced else result.actual_usd
         raw_diagnostic=result.data.get("diagnostic_code")
@@ -91,6 +140,7 @@ class Orchestrator:
             self.store.finalize_overrun_and_pause(task_id,call_id,actual,state); return None
         if result.status is not AgentStatus.SUCCEEDED:
             if diagnostic == "transport-cleanup-failed":self.store.record_attention(task_id,diagnostic)
+            self._record_transport_failure(task_id, request.role, diagnostic)
             self.store.transition(task_id, state, TaskState.FAILED_RECOVERABLE, diagnostic)
             return None
         if result.data.get("status") == "failed":
@@ -229,6 +279,7 @@ class Orchestrator:
     def run_until_blocked(self, task_id: str) -> TaskState:
         owner = str(uuid.uuid4()); self.store.acquire_lease(task_id, owner, 600); self._lease_owner=owner
         try:
+            self.store.record_execution_provenance(task_id, **self._execution_provenance())
             for _ in range(100):
                 state = self.advance(task_id)
                 if state in BLOCKED_STATES:
@@ -254,6 +305,11 @@ class Orchestrator:
             task = self.store.load(task_id)
             if task.state is not TaskState.FAILED_RECOVERABLE:
                 raise ValueError("only FAILED_RECOVERABLE tasks can be resumed")
+            persisted_provenance = self.store.execution_provenance(task_id)
+            if persisted_provenance is None:
+                raise ValueError("execution provenance is missing")
+            if persisted_provenance != self._execution_provenance():
+                raise ValueError("execution provenance mismatch")
             failed = [
                 outcome
                 for stage, outcome in self.store.outcomes(task_id).items()
