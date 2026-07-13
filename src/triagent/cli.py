@@ -64,11 +64,15 @@ def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake",
     if profile != "fake" and not (live_confirmed and billing_confirmed):
         raise typer.BadParameter("real profiles require --live-confirmed and --billing-confirmed")
     config=None; budget=Budget()
-    if profile != "fake":
-        config=tomllib.loads(Path(profile).read_text(encoding="utf-8"))
-        values=config.get("budget",{})
-        budget=Budget(max_agent_calls=int(values.get("max_agent_calls",20)),max_minutes=int(values.get("max_minutes",60)),max_usd=float(values.get("max_usd",0)))
-    GitWorkspace.validate(repo)
+    try:
+        if profile != "fake":
+            config=tomllib.loads(Path(profile).read_text(encoding="utf-8"))
+            values=config.get("budget",{})
+            budget=Budget(max_agent_calls=int(values.get("max_agent_calls",20)),max_minutes=int(values.get("max_minutes",60)),max_usd=float(values.get("max_usd",0)))
+            for agent in ("cursor","codex","antigravity","opencode"):_profile_command(config,agent)
+        GitWorkspace.validate(repo)
+    except (OSError,tomllib.TOMLDecodeError,ValueError,TypeError,RuntimeError):
+        raise typer.BadParameter("task input validation failed") from None
     store = TaskStore(_root(data_root)); task = store.create_task(_spec(repo, goal, budget))
     run_worktree = store.runs_root / task.id / "worktree"
     try:

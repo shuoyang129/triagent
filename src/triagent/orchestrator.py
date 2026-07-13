@@ -81,7 +81,10 @@ class Orchestrator:
         except BudgetExceeded:
             self.store.finalize_overrun_and_pause(task_id,call_id,actual,state); return None
         if result.status is not AgentStatus.SUCCEEDED:
-            self.store.transition(task_id, state, TaskState.FAILED_RECOVERABLE, result.status.value)
+            diagnostic=result.data.get("diagnostic_code")
+            if diagnostic == "transport-cleanup-failed":self.store.record_attention(task_id,diagnostic)
+            event=diagnostic if isinstance(diagnostic,str) else result.status.value
+            self.store.transition(task_id, state, TaskState.FAILED_RECOVERABLE, event)
             return None
         if result.data.get("status") == "failed":
             stage={AgentRole.IMPLEMENTER:"implement",AgentRole.VERIFIER:"verify",AgentRole.REVIEWER:"review"}[request.role]
@@ -181,11 +184,12 @@ class Orchestrator:
                 if task.spec.visual_check == "required"
                 else TaskState.APPROVAL
             )
-            if target is TaskState.WAITING_FOR_VISUAL_APPROVAL: self.store.request_approval(task_id,"visual")
+            manifest=self.store.approval_manifest(task_id)
+            if target is TaskState.WAITING_FOR_VISUAL_APPROVAL: self.store.request_approval(task_id,"visual",manifest)
             else:
-                self.store.request_approval(task_id,"outcome")
+                self.store.request_approval(task_id,"outcome",manifest)
                 meta=self.store.workspace(task_id)
-                if meta: self.store.request_approval(task_id,"merge",{"repo":meta["repo"],"task_id":task_id,"branch":meta["branch"]})
+                if meta: self.store.request_approval(task_id,"merge",manifest)
             return self.store.transition(task_id, state, target, "review-passed").state
         raise RuntimeError(f"unsupported state: {state.value}")
 

@@ -28,5 +28,5 @@ class AntigravityAdapter(AgentAdapter):
                 if error:return error
                 instruction=f"Read and follow the complete instructions in this local file: {path}"
                 return invoke_json(self._runner,[*self._command,"-p",instruction],request.workdir,request.timeout_seconds,self._env,self._secrets,request.role)
-        except TransportSecurityError:
-            return AgentResult(status=AgentStatus.FAILED,summary="restricted input transport failed")
+        except TransportSecurityError as error:
+            return AgentResult(status=AgentStatus.FAILED,summary=error.code,data={"diagnostic_code":error.code})

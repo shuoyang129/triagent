@@ -62,7 +62,7 @@ class CursorAdapter(AgentAdapter):
                 model_listed = models_ok and "deepseek-v3" in json.loads(models).get("models", [])
             except (json.JSONDecodeError, AttributeError):
                 model_listed = False
-            smoke = filesystem_probe(self._runner, self._command("--print", "--json"), self._probe_dir, self._env, self._wsl_path)
+            smoke = filesystem_probe(self._runner, self._command("--print", "--output-format", "json"), self._probe_dir, self._env, self._wsl_path)
         byok = model_listed and smoke and self._billing
         ready = installed and authenticated
         return CursorCapabilities(available=ready, installed=installed, version=version or None, authenticated=authenticated, headless=installed, ready=ready, deepseek_model_listed=model_listed, deepseek_agent_smoke_test=smoke, deepseek_billing_confirmed=self._billing, deepseek_byok_available=byok)

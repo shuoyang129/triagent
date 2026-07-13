@@ -48,9 +48,11 @@ def test_real_adapter_runner_receives_exact_task_and_handoff_bytes(tmp_path,adap
     role=AgentRole.VERIFIER if adapter_cls is CodexAdapter else AgentRole.REVIEWER
     req=AgentRequest(role=role,agent_identity=adapter.identity,task_file=task,handoff_file=handoff,workdir=tmp_path,output_schema="x",timeout_seconds=5)
     adapter.run(req)
-    expected=b'TRIAGENT_INPUT_V1\nTASK\n{"goal":"exact"}\nHANDOFF\n'+handoff.read_bytes()
-    assert runner.inputs[0] == expected and all(not path.exists() for path in runner.paths)
-    assert expected.decode() not in " ".join(runner.calls[0])
+    actual=runner.inputs[0]
+    assert actual.startswith(b"TRIAGENT_CONTROLLER_PROMPT_V2\n")
+    assert actual.endswith(b'TASK\n{"goal":"exact"}\nHANDOFF\n'+handoff.read_bytes())
+    assert all(not path.exists() for path in runner.paths)
+    assert actual.decode() not in " ".join(runner.calls[0])
 
 def test_adapter_instance_cannot_be_relabeled():
     adapter=CodexAdapter(runner=Runner())

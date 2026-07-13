@@ -52,7 +52,33 @@ def read_prompt(request) -> tuple[str | None, AgentResult | None]:
         if request.role in {AgentRole.VERIFIER, AgentRole.REVIEWER}:
             if request.handoff_file is None: raise ValueError("handoff required")
             handoff_bytes=request.handoff_file.read_bytes(); json.loads(handoff_bytes.decode("utf-8"))
-        payload=b"TRIAGENT_INPUT_V1\nTASK\n"+task_bytes+b"\nHANDOFF\n"+handoff_bytes
+        role=request.role
+        operation={
+            AgentRole.IMPLEMENTER:"implementer",
+            AgentRole.VERIFIER:"verifier",
+            AgentRole.REVIEWER:"reviewer",
+        }[role]
+        properties={
+            "status":{"type":"string","enum":["passed","failed"]},
+            "evidence":{"type":"array","items":{"type":"string"},"maxItems":50},
+            "artifacts":{"type":"array","items":{"type":"string"},"maxItems":50},
+            "actual_usd":{"type":["number","null"],"minimum":0},
+        }
+        required=["status","evidence","artifacts"]
+        if role is AgentRole.REVIEWER:
+            properties["findings"]={"type":"array","maxItems":50,"items":{"type":"object","additionalProperties":False,"required":["severity","code","message"],"properties":{"severity":{"type":"string","enum":["BLOCKER","MAJOR","MINOR","NOTE"]},"code":{"type":"string","minLength":1,"maxLength":100},"message":{"type":"string","minLength":1,"maxLength":500}}}}
+            required.append("findings")
+        schema=json.dumps({"type":"object","additionalProperties":False,"required":required,"properties":properties},sort_keys=True,separators=(",",":"))
+        header=(
+            "TRIAGENT_CONTROLLER_PROMPT_V2\n"
+            f"IMMUTABLE_ROLE={role.value}\n"
+            f"REQUIRED_OPERATION={operation}\n"
+            "SAFETY_BOUNDARY=Work only inside the supplied task and workdir; do not expand scope, reveal secrets, or perform approval-gated actions.\n"
+            f"OUTPUT_SCHEMA_ID={request.output_schema}\n"
+            "OUTPUT_RULE=Return exactly one JSON object matching OUTPUT_SCHEMA_JSON with no prose or markdown.\n"
+            f"OUTPUT_SCHEMA_JSON={schema}\nTASK\n"
+        ).encode("utf-8")
+        payload=header+task_bytes+b"\nHANDOFF\n"+handoff_bytes
         return payload.decode("utf-8"), None
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
         return None, AgentResult(status=AgentStatus.FAILED, summary="Unable to read task file")
@@ -78,35 +104,67 @@ class CursorEnvelope(BaseModel):
     result: StrictStr
     total_cost_usd: float|None=Field(default=None,ge=0,allow_inf_nan=False,strict=True)
 
-class TransportSecurityError(RuntimeError): pass
-def _windows_acl(directory:Path,file:Path)->bool:
-    user=os.environ.get("USERNAME")
-    if not user:return False
-    for target in (directory,file):
-        grant=f"{user}:(OI)(CI)F" if target==directory else f"{user}:F"
-        result=subprocess.run(["icacls",str(target),"/inheritance:r","/grant:r",grant,"SYSTEM:F"],capture_output=True,text=True,check=False)
-        if result.returncode!=0:return False
-        check=subprocess.run(["icacls",str(target)],capture_output=True,text=True,check=False)
-        lowered=check.stdout.lower()
-        if check.returncode!=0 or any(x in lowered for x in ("everyone:","authenticated users:","builtin\\users:")):return False
-    return True
+class TransportSecurityError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        self.code=code
+        super().__init__(code)
+
+def _powershell_json(script:str):
+    result=subprocess.run(["powershell.exe","-NoProfile","-NonInteractive","-Command",script],capture_output=True,text=True,check=False)
+    if result.returncode != 0:return None
+    try:return json.loads(result.stdout)
+    except (json.JSONDecodeError,TypeError):return None
+
+def _windows_current_sid()->str|None:
+    value=_powershell_json("[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value | ConvertTo-Json -Compress")
+    return value if isinstance(value,str) and re.fullmatch(r"S-1-[0-9-]+",value) else None
+
+def _windows_acl(directory:Path,file:Path|None)->bool:
+    sid=_windows_current_sid()
+    if sid is None:return False
+    target=file or directory
+    quoted=str(target).replace("'","''")
+    is_directory=file is None
+    inheritance="(A;OICI;FA;;;{0})(A;OICI;FA;;;SY)" if is_directory else "(A;;FA;;;{0})(A;;FA;;;SY)"
+    sddl=f"O:{sid}G:{sid}D:P"+inheritance.format(sid)
+    security_type="DirectorySecurity" if is_directory else "FileSecurity"
+    apply=(
+        f"$s=New-Object System.Security.AccessControl.{security_type};"
+        f"$s.SetSecurityDescriptorSddlForm('{sddl}');"
+        f"Set-Acl -LiteralPath '{quoted}' -AclObject $s -ErrorAction Stop;"
+        f"$a=Get-Acl -LiteralPath '{quoted}' -ErrorAction Stop;"
+        "$rules=@($a.Access|ForEach-Object{@{sid=$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value;type=$_.AccessControlType.ToString();rights=$_.FileSystemRights.ToString()}});"
+        "@{owner=$a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;protected=$a.AreAccessRulesProtected;rules=$rules}|ConvertTo-Json -Depth 4 -Compress"
+    )
+    evidence=_powershell_json(apply)
+    if not isinstance(evidence,dict) or evidence.get("owner")!=sid or evidence.get("protected") is not True:return False
+    rules=evidence.get("rules",[])
+    if isinstance(rules,dict):rules=[rules]
+    allowed={sid,"S-1-5-18"}
+    if not isinstance(rules,list) or {r.get("sid") for r in rules if isinstance(r,dict)} != allowed:return False
+    return all(isinstance(r,dict) and r.get("type")=="Allow" and "FullControl" in r.get("rights","") for r in rules)
 @contextmanager
 def external_restricted_input(request,acl_verifier=None):
     payload,error=read_prompt(request)
     if error: yield None,error; return
     directory=Path(tempfile.mkdtemp(prefix="triagent-private-")); file=directory/"input.txt"
     try:
-        file.write_bytes(payload.encode("utf-8"))
-        if os.name=="nt": secured=(acl_verifier or _windows_acl)(directory,file)
+        if os.name=="nt":
+            verifier=acl_verifier or _windows_acl
+            if not verifier(directory,None):raise TransportSecurityError("transport-acl-setup-failed")
+            file.touch(exist_ok=False)
+            if not verifier(directory,file):raise TransportSecurityError("transport-acl-verification-failed")
         else:
-            directory.chmod(0o700); file.chmod(0o600); secured=(directory.stat().st_mode&0o777)==0o700 and (file.stat().st_mode&0o777)==0o600
-        if not secured: raise TransportSecurityError("input transport ACL verification failed")
+            directory.chmod(0o700)
+            file.touch(mode=0o600,exist_ok=False); file.chmod(0o600)
+            if (directory.stat().st_mode&0o777)!=0o700 or (file.stat().st_mode&0o777)!=0o600:raise TransportSecurityError("transport-acl-verification-failed")
+        file.write_bytes(payload.encode("utf-8"))
         yield file,None
     finally:
         for attempt in range(3):
             try: shutil.rmtree(directory); break
             except OSError:
-                if attempt==2: raise TransportSecurityError("input transport cleanup failed")
+                if attempt==2: raise TransportSecurityError("transport-cleanup-failed")
                 time.sleep(.01)
 
 

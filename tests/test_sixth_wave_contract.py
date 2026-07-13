@@ -24,7 +24,7 @@ def test_cursor_captured_help_contract_and_nested_wrapper_stdin(tmp_path):
     nested=json.dumps({"status":"passed","evidence":["ok"]});runner=Runner(ProcessResult(0,json.dumps({"type":"result","subtype":"success","is_error":False,"result":nested,"total_cost_usd":.2}),"",False))
     result=CursorAdapter(runner=runner).run(req(tmp_path,AgentRole.IMPLEMENTER))
     argv=runner.calls[0];assert result.status is AgentStatus.SUCCEEDED and argv[-3:]==["--print","--output-format","json"]
-    assert runner.stdin[0].startswith("TRIAGENT_INPUT_V1") and "--input-file" not in argv and not list(tmp_path.glob(".triagent-input-*"))
+    assert runner.stdin[0].startswith("TRIAGENT_CONTROLLER_PROMPT_V2") and "--input-file" not in argv and not list(tmp_path.glob(".triagent-input-*"))
 
 def test_codex_documented_dash_stdin_large_payload(tmp_path):
     event=json.dumps({"type":"item.completed","item":{"type":"agent_message","text":json.dumps({"status":"passed"})}});runner=Runner(ProcessResult(0,event,"",False))
@@ -35,8 +35,8 @@ def test_antigravity_external_acl_path_only_and_cleanup(tmp_path):
     checked=[];runner=Runner(ProcessResult(0,json.dumps({"status":"passed","findings":[]}),"",False))
     adapter=AntigravityAdapter(runner=runner,acl_verifier=lambda directory,file:checked.append((directory,file)) or True)
     assert adapter.run(req(tmp_path,AgentRole.REVIEWER)).status is AgentStatus.SUCCEEDED
-    directory,file=checked[0];assert tmp_path not in file.parents and runner.stdin[0] is None and not directory.exists()
-    assert "TRIAGENT_INPUT_V1" not in " ".join(runner.calls[0]) and runner.path_bytes[0].startswith(b"TRIAGENT_INPUT_V1")
+    directory,file=checked[1];assert checked[0]==(directory,None) and tmp_path not in file.parents and runner.stdin[0] is None and not directory.exists()
+    assert "TRIAGENT_CONTROLLER_PROMPT_V2" not in " ".join(runner.calls[0]) and runner.path_bytes[0].startswith(b"TRIAGENT_CONTROLLER_PROMPT_V2")
 
 def test_antigravity_acl_failure_never_invokes_runner(tmp_path):
     runner=Runner(ProcessResult(0,"{}","",False));result=AntigravityAdapter(runner=runner,acl_verifier=lambda d,f:False).run(req(tmp_path,AgentRole.REVIEWER))

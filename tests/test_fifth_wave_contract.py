@@ -37,5 +37,5 @@ def test_resource_versions_require_separate_approvals(tmp_path):
 
 def test_malformed_reviewer_finding_is_invalid_before_orchestration(tmp_path):
     payload={"status":"passed","findings":[{"severity":"MYSTERY","code":"x","message":"x"}]}
-    result=AntigravityAdapter(runner=Runner(ProcessResult(0,json.dumps(payload),"",False))).run(request(tmp_path,AgentRole.REVIEWER))
+    result=AntigravityAdapter(runner=Runner(ProcessResult(0,json.dumps(payload),"",False)),acl_verifier=lambda directory,file:True).run(request(tmp_path,AgentRole.REVIEWER))
     assert result.status is AgentStatus.INVALID_OUTPUT

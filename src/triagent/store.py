@@ -6,6 +6,7 @@ import uuid
 import os
 import re
 import hashlib
+import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -97,6 +98,14 @@ class TaskStore:
             connection.execute("CREATE TABLE IF NOT EXISTS approval_records_versions(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action,resource_json))")
             connection.execute("CREATE TABLE IF NOT EXISTS approval_requests_versions(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action,resource_json))")
             connection.execute("CREATE TABLE IF NOT EXISTS system_attestations(task_id TEXT NOT NULL, name TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(task_id,name))")
+            connection.execute("CREATE TABLE IF NOT EXISTS attention_items(task_id TEXT NOT NULL, code TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(task_id,code))")
+            for table in ("approval_records_versions","approval_requests_versions"):
+                for column,kind in (("sequence","INTEGER"),("created_at","TEXT")):
+                    try: connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+                    except sqlite3.OperationalError as error:
+                        if "duplicate column name" not in str(error).lower():raise
+                connection.execute(f"UPDATE {table} SET sequence=rowid WHERE sequence IS NULL")
+                connection.execute(f"UPDATE {table} SET created_at='' WHERE created_at IS NULL")
 
     def create_task(self, spec: TaskSpec) -> StoredTask:
         task_id = str(uuid.uuid4())
@@ -198,6 +207,51 @@ class TaskStore:
     def workspace(self, task_id: str):
         with self._connect() as connection: return connection.execute("SELECT * FROM workspace_meta WHERE task_id=?",(task_id,)).fetchone()
 
+    def approval_manifest(self, task_id: str) -> dict[str,str]:
+        meta=self.workspace(task_id)
+        empty=hashlib.sha256(b"").hexdigest()
+        if meta is None:
+            return {"repo":"fake","task_id":task_id,"branch":"fake","base_commit":"fake","reviewed_head":"fake","canonical_diff_digest":empty,"visual_artifact_digest":empty,"visual_artifact_version":empty}
+        work=self.runs_root/task_id/"worktree"
+        try:
+            head=subprocess.run(["git","rev-parse","HEAD"],cwd=work,check=True,capture_output=True,text=True).stdout.strip()
+            diff=subprocess.run(["git","diff","--binary",meta["base_commit"]],cwd=work,check=True,capture_output=True).stdout
+            untracked=subprocess.run(["git","ls-files","--others","--exclude-standard"],cwd=work,check=True,capture_output=True,text=True).stdout.splitlines()
+            extra=[]
+            root=work.resolve()
+            for name in sorted(untracked):
+                path=(work/name).resolve()
+                if root not in path.parents:raise ValueError("unsafe untracked path")
+                data=path.read_bytes()
+                extra.append({"path":name,"sha256":hashlib.sha256(data).hexdigest(),"size":len(data)})
+        except (OSError,subprocess.CalledProcessError,UnicodeError,ValueError) as error:
+            raise ValueError("approval manifest unavailable") from error
+        diff_digest=hashlib.sha256(diff+json.dumps(extra,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+        artifacts=[]
+        root=work.resolve()
+        for outcome in self.outcomes(task_id).values():
+            for name in outcome.artifacts:
+                candidate=(work/name).resolve()
+                if root in candidate.parents and candidate.is_file():
+                    data=candidate.read_bytes(); artifacts.append({"name":name,"sha256":hashlib.sha256(data).hexdigest(),"size":len(data)})
+                else: artifacts.append({"name":name,"sha256":hashlib.sha256(name.encode()).hexdigest(),"size":0})
+        artifact_digest=hashlib.sha256(json.dumps(sorted(artifacts,key=lambda x:x["name"]),sort_keys=True,separators=(",",":")).encode()).hexdigest()
+        return {"repo":meta["repo"],"task_id":task_id,"branch":meta["branch"],"base_commit":meta["base_commit"],"reviewed_head":head,"canonical_diff_digest":diff_digest,"visual_artifact_digest":artifact_digest,"visual_artifact_version":artifact_digest}
+
+    def _verify_approval_manifest(self, task_id:str,action:str,resource_json:str)->None:
+        if action not in {"visual","outcome","merge"} or self.workspace(task_id) is None:return
+        resource=json.loads(resource_json); current=self.approval_manifest(task_id)
+        if any(resource.get(key)!=value for key,value in current.items()):raise ValueError("approval manifest changed")
+
+    def record_attention(self,task_id:str,code:str)->None:
+        allowed={"transport-cleanup-failed"}
+        if code not in allowed:raise ValueError("unknown attention code")
+        with self._connect() as connection:connection.execute("INSERT OR REPLACE INTO attention_items VALUES(?,?,?)",(task_id,code,datetime.now(UTC).isoformat()))
+
+    def attention_items(self,task_id:str)->list[str]:
+        with self._connect() as connection:rows=connection.execute("SELECT code FROM attention_items WHERE task_id=? ORDER BY created_at,code",(task_id,)).fetchall()
+        return [row[0] for row in rows]
+
     def acquire_lease(self, task_id: str, owner: str, seconds: float) -> None:
         import time
         with self._connect() as connection:
@@ -234,15 +288,18 @@ class TaskStore:
             row=connection.execute("SELECT state FROM tasks WHERE id=?", (task_id,)).fetchone()
             runtime=connection.execute("SELECT approvals_json FROM task_runtime WHERE task_id=?", (task_id,)).fetchone(); requests=connection.execute("SELECT r.resource_json FROM approval_requests_versions r WHERE task_id=? AND action=? AND NOT EXISTS(SELECT 1 FROM approval_records_versions a WHERE a.task_id=r.task_id AND a.action=r.action AND a.resource_json=r.resource_json)",(task_id,action)).fetchall()
             if row is None or runtime is None or len(requests)!=1: raise ValueError("approval request version is missing or ambiguous")
-            request=requests[0]
+            request=requests[0]; self._verify_approval_manifest(task_id,action,request[0])
             if row["state"] != expected.value: raise StateConflict("approval state changed")
             approvals=sorted(set(json.loads(runtime[0]))|{action})
             connection.execute("UPDATE task_runtime SET approvals_json=? WHERE task_id=?", (json.dumps(approvals),task_id))
-            connection.execute("INSERT INTO approval_records_versions VALUES(?,?,?)",(task_id,action,request[0]))
+            record_sequence=connection.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM approval_records_versions WHERE task_id=? AND action=?",(task_id,action)).fetchone()[0]
+            connection.execute("INSERT INTO approval_records_versions(task_id,action,resource_json,sequence,created_at) VALUES(?,?,?,?,?)",(task_id,action,request[0],record_sequence,timestamp))
             meta=connection.execute("SELECT * FROM workspace_meta WHERE task_id=?",(task_id,)).fetchone()
-            version={"task_id":task_id,"repo":meta["repo"] if meta else "fake","base_commit":meta["base_commit"] if meta else "fake","branch":meta["branch"] if meta else "fake"}
+            version=self.approval_manifest(task_id)
             canonical=json.dumps(version,sort_keys=True,separators=(",",":")); version["resource_version"]=hashlib.sha256(canonical.encode()).hexdigest(); version["requested_at"]=timestamp
-            for pending in ("outcome","merge"): connection.execute("INSERT OR REPLACE INTO approval_requests_versions VALUES(?,?,?)",(task_id,pending,json.dumps(version,sort_keys=True)))
+            for pending in ("outcome","merge"):
+                sequence=connection.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM approval_requests_versions WHERE task_id=? AND action=?",(task_id,pending)).fetchone()[0]
+                connection.execute("INSERT OR REPLACE INTO approval_requests_versions(task_id,action,resource_json,sequence,created_at) VALUES(?,?,?,?,?)",(task_id,pending,json.dumps(version,sort_keys=True),sequence,timestamp))
             connection.execute("UPDATE tasks SET state=?,updated_at=? WHERE id=?", (target.value,timestamp,task_id)); connection.commit()
         except Exception: connection.rollback(); raise
         finally: connection.close()
@@ -275,21 +332,24 @@ class TaskStore:
         with self._connect() as connection: connection.execute("INSERT OR REPLACE INTO system_attestations VALUES(?,?,?)",(task_id,name,int(value)))
 
     def approval_resource(self, task_id: str, action: str) -> dict[str,str] | None:
-        with self._connect() as connection: row=connection.execute("SELECT resource_json FROM approval_records_versions WHERE task_id=? AND action=? ORDER BY resource_json DESC LIMIT 1",(task_id,action)).fetchone()
+        with self._connect() as connection: row=connection.execute("SELECT resource_json FROM approval_records_versions WHERE task_id=? AND action=? ORDER BY sequence DESC,created_at DESC LIMIT 1",(task_id,action)).fetchone()
         return json.loads(row[0]) if row else None
     def approve_requested(self, task_id: str, action: str) -> TaskRuntime:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             requests=connection.execute("SELECT resource_json FROM approval_requests_versions r WHERE task_id=? AND action=? AND NOT EXISTS(SELECT 1 FROM approval_records_versions a WHERE a.task_id=r.task_id AND a.action=r.action AND a.resource_json=r.resource_json)",(task_id,action)).fetchall()
             if len(requests)!=1: raise ValueError("approval request version is missing or ambiguous")
-            request=requests[0]
-            connection.execute("INSERT INTO approval_records_versions VALUES(?,?,?)",(task_id,action,request[0]))
+            request=requests[0]; self._verify_approval_manifest(task_id,action,request[0])
+            now=datetime.now(UTC).isoformat(); sequence=connection.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM approval_records_versions WHERE task_id=? AND action=?",(task_id,action)).fetchone()[0]
+            connection.execute("INSERT INTO approval_records_versions(task_id,action,resource_json,sequence,created_at) VALUES(?,?,?,?,?)",(task_id,action,request[0],sequence,now))
             actions=[r[0] for r in connection.execute("SELECT DISTINCT action FROM approval_records_versions WHERE task_id=? ORDER BY action",(task_id,)).fetchall()]
             connection.execute("UPDATE task_runtime SET approvals_json=? WHERE task_id=?",(json.dumps(actions),task_id))
         return self.runtime(task_id)
     def request_approval(self, task_id: str, action: str, resource: dict[str,str] | None = None) -> None:
-        value=dict(resource or {}); canonical=json.dumps(value,sort_keys=True,separators=(",",":")); value["resource_version"]=hashlib.sha256(canonical.encode()).hexdigest(); value["requested_at"]=datetime.now(UTC).isoformat()
-        with self._connect() as connection: connection.execute("INSERT OR REPLACE INTO approval_requests_versions VALUES(?,?,?)",(task_id,action,json.dumps(value,sort_keys=True)))
+        value=dict(resource or {}); canonical=json.dumps(value,sort_keys=True,separators=(",",":")); value["resource_version"]=hashlib.sha256(canonical.encode()).hexdigest(); now=datetime.now(UTC).isoformat(); value["requested_at"]=now
+        with self._connect() as connection:
+            sequence=connection.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM approval_requests_versions WHERE task_id=? AND action=?",(task_id,action)).fetchone()[0]
+            connection.execute("INSERT OR REPLACE INTO approval_requests_versions(task_id,action,resource_json,sequence,created_at) VALUES(?,?,?,?,?)",(task_id,action,json.dumps(value,sort_keys=True),sequence,now))
     def outstanding_approvals(self, task_id: str) -> list[str]:
         with self._connect() as connection:
             rows=connection.execute("SELECT r.action FROM approval_requests_versions r LEFT JOIN approval_records_versions a ON a.task_id=r.task_id AND a.action=r.action AND a.resource_json=r.resource_json WHERE r.task_id=? AND a.action IS NULL ORDER BY r.action",(task_id,)).fetchall()
