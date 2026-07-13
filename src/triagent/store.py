@@ -279,7 +279,14 @@ class TaskStore:
         }
         return run_git(work,args,stdin=stdin,extra_env=environment).stdout
 
-    def _candidate_manifest(self,task_id:str,work:Path,base:str,changed_paths:list[str]|None=None)->dict[str,tuple[str,str,bytes]]:
+    def _candidate_manifest(
+        self,
+        task_id: str,
+        work: Path,
+        base: str,
+        changed_paths: list[str] | None = None,
+        require_changes: bool = False,
+    ) -> dict[str, tuple[str, str, bytes]]:
         try:
             base_rows=self._git_plumbing(work,["ls-tree","-r","-z",base]).split(b"\0")
         except (OSError,subprocess.CalledProcessError) as error:raise ValueError("candidate manifest rejected") from error
@@ -321,6 +328,8 @@ class TaskStore:
                     if b"\0" not in current and b"\0" not in original:equivalent=current.replace(b"\r\n",b"\n")==original.replace(b"\r\n",b"\n")
                 if not equivalent:tracked_changes.add(name)
             actual_changes=tracked_changes|untracked
+            if require_changes and not actual_changes:
+                raise ValueError("candidate manifest rejected: no changes")
         except (OSError,UnicodeError,subprocess.CalledProcessError) as error:raise ValueError("candidate manifest rejected") from error
         if changed_paths is not None:
             supplied=set(changed_paths)
@@ -401,7 +410,12 @@ class TaskStore:
             cursor=connection.execute("UPDATE workspace_meta SET reviewed_commit=?,candidate_ref=? WHERE task_id=? AND COALESCE(reviewed_commit,'')=?",(reviewed,candidate_ref,task_id,old))
             return cursor.rowcount==1
 
-    def materialize_reviewed_commit(self,task_id:str,changed_paths:list[str]|None=None)->str:
+    def materialize_reviewed_commit(
+        self,
+        task_id: str,
+        changed_paths: list[str] | None = None,
+        require_changes: bool = False,
+    ) -> str:
         meta=self.workspace(task_id)
         if meta is None:
             if self.load(task_id).spec.visual_check == "required":raise ValueError("required visual artifact unavailable")
@@ -409,7 +423,9 @@ class TaskStore:
         work=self.runs_root/task_id/"worktree"
         if not work.exists():raise ValueError("candidate materialization failed")
         try:
-            manifest=self._candidate_manifest(task_id,work,meta["base_commit"],changed_paths)
+            manifest = self._candidate_manifest(
+                task_id, work, meta["base_commit"], changed_paths, require_changes
+            )
             tree=self._candidate_tree(work,manifest)
             reviewed=self._git_plumbing(work,["commit-tree",tree,"-p",meta["base_commit"]],f"triagent candidate {task_id}\n".encode()).decode("ascii").strip()
             actual={}
@@ -418,7 +434,9 @@ class TaskStore:
                 entry,name=row.split(b"\t",1); mode,kind,oid=entry.decode("ascii").split(); actual[name.decode("utf-8")]=(mode,oid)
             expected={name:(mode,oid) for name,(mode,oid,_data) in manifest.items()}
             if actual!=expected:raise ValueError("candidate tree mismatch")
-            stable=self._candidate_manifest(task_id,work,meta["base_commit"],changed_paths)
+            stable = self._candidate_manifest(
+                task_id, work, meta["base_commit"], changed_paths, require_changes
+            )
             if {name:(mode,oid) for name,(mode,oid,_data) in stable.items()}!=expected:raise ValueError("candidate manifest changed")
             candidate_ref=f"refs/triagent/reviewed/{task_id}"
             try:prior_ref=self._git_plumbing(work,["rev-parse","--verify",candidate_ref]).decode().strip()

@@ -54,6 +54,16 @@ def test_changed_paths_must_exactly_match_actual_changes(tmp_path):
     assert subprocess.run(["git","show",f"{candidate}:allowed.txt"],cwd=work,check=True,capture_output=True).stdout==b"ok"
 
 
+def test_required_change_rejects_noop_without_breaking_general_noop_candidates(tmp_path):
+    store, task, _work = setup(tmp_path)
+
+    with pytest.raises(ValueError, match="candidate manifest rejected: no changes"):
+        store.materialize_reviewed_commit(task.id, require_changes=True)
+
+    candidate = store.materialize_reviewed_commit(task.id, [])
+    assert candidate
+
+
 @pytest.mark.parametrize("name,data",[
     ("config.json",b'{"client_secret":"abcdefghijklmnopqrstuvwxyz"}'),
     ("id_ed25519",b"-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n"),
