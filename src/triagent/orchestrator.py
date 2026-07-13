@@ -146,7 +146,34 @@ class Orchestrator:
             )
             if result is None:
                 return self.store.load(task_id).state
-            self.store.record_outcome(task_id, self._outcome("implement", result)); self.store.materialize_reviewed_commit(task_id,result.data.get("changed_paths")); self._write_handoff(task_id)
+            cursor_implementation = type(self.implementer) is CursorAdapter
+            try:
+                self.store.materialize_reviewed_commit(
+                    task_id,
+                    None if cursor_implementation else result.data.get("changed_paths"),
+                    require_changes=cursor_implementation,
+                )
+            except ValueError as error:
+                if cursor_implementation and str(error) == "candidate manifest rejected: no changes":
+                    diagnostic = "cursor-no-worktree-change"
+                    self.store.record_outcome(
+                        task_id,
+                        StageOutcome(
+                            stage="implement",
+                            status="failed",
+                            summary="requires-repair",
+                            diagnostic=diagnostic,
+                        ),
+                    )
+                    return self.store.transition(
+                        task_id,
+                        state,
+                        TaskState.FAILED_RECOVERABLE,
+                        diagnostic,
+                    ).state
+                raise
+            self.store.record_outcome(task_id, self._outcome("implement", result))
+            self._write_handoff(task_id)
             return self.store.transition(task_id, state, TaskState.VERIFY, "implementation-complete").state
         if state is TaskState.VERIFY:
             result = self._call(
