@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -181,6 +182,15 @@ def test_windows_private_dacl_real_sid_contract(tmp_path):
     assert _windows_acl(directory, None)
     file.write_text("payload", encoding="utf-8")
     assert _windows_acl(directory, file)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows DACL contract")
+def test_windows_private_dacl_supports_fresh_tempfile_directory():
+    directory = Path(tempfile.mkdtemp(prefix="triagent-private-"))
+    try:
+        assert _windows_acl(directory, None)
+    finally:
+        shutil.rmtree(directory)
 
 
 @pytest.mark.skipif(shutil.which("wsl.exe") is None, reason="WSL unavailable")

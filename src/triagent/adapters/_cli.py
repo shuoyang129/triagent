@@ -133,13 +133,16 @@ def _windows_acl(directory:Path,file:Path|None)->bool:
     target=file or directory
     quoted=str(target).replace("'","''")
     is_directory=file is None
-    inheritance="(A;OICI;FA;;;{0})(A;OICI;FA;;;SY)" if is_directory else "(A;;FA;;;{0})(A;;FA;;;SY)"
-    sddl=f"O:{sid}G:{sid}D:P"+inheritance.format(sid)
-    security_type="DirectorySecurity" if is_directory else "FileSecurity"
+    grant=f"*{sid}:(OI)(CI)F" if is_directory else f"*{sid}:F"
+    system_grant="*S-1-5-18:(OI)(CI)F" if is_directory else "*S-1-5-18:F"
+    try:
+        acl_process=subprocess.run(
+            ["icacls.exe",str(target),"/inheritance:r","/remove:g","*S-1-3-4","*S-1-5-32-544","/grant:r",grant,"/grant:r",system_grant],
+            capture_output=True,text=True,check=False,timeout=10,
+        )
+    except (OSError,subprocess.TimeoutExpired):return False
+    if acl_process.returncode!=0:return False
     apply=(
-        f"$s=New-Object System.Security.AccessControl.{security_type};"
-        f"$s.SetSecurityDescriptorSddlForm('{sddl}');"
-        f"Set-Acl -LiteralPath '{quoted}' -AclObject $s -ErrorAction Stop;"
         f"$a=Get-Acl -LiteralPath '{quoted}' -ErrorAction Stop;"
         "$rules=@($a.Access|ForEach-Object{@{sid=$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value;type=$_.AccessControlType.ToString();rights=$_.FileSystemRights.ToString();inheritance=$_.InheritanceFlags.ToString();propagation=$_.PropagationFlags.ToString()}});"
         "@{owner=$a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;protected=$a.AreAccessRulesProtected;rules=$rules}|ConvertTo-Json -Depth 4 -Compress"
