@@ -514,3 +514,50 @@ Expected on full success:
 - no vendor free text or credentials appear in persisted artifacts.
 
 If the smoke stops earlier, report the exact persisted stage and diagnostic without another paid retry.
+
+---
+
+### Task 14: Allow Codex verification tests to run in the Windows worktree
+
+**Discovered by:** bounded live task `5061a415-c51d-4f9f-9105-b1f62ecb50ad`, where Cursor completed and Codex reported `sandbox helper launch failed with Access denied (os error 5)` under `read-only`.
+
+**Files:**
+- Modify: `src/triagent/adapters/codex.py`
+- Test: `tests/test_cli_capabilities.py`
+
+**Constraints:**
+- Use the documented `workspace-write` sandbox, not `danger-full-access` or a bypass flag.
+- Keep the verifier role, structured JSONL parsing, stdin prompt transport, reviewed candidate ref, and all other adapter behavior unchanged.
+- Do not run another paid live smoke in this task.
+
+- [ ] **Step 1: Change the existing Codex invocation assertion to require `workspace-write`**
+
+Rename the invocation test to describe workspace-write verification and change its argv assertion to:
+
+```python
+assert argv[:4] == ["codex.exe", "exec", "--sandbox", "workspace-write"]
+assert "--dangerously-bypass-approvals-and-sandbox" not in argv
+```
+
+- [ ] **Step 2: Run the focused test and verify RED**
+
+Expected: failure shows actual `read-only` differs from required `workspace-write`.
+
+- [ ] **Step 3: Change only the Codex sandbox argument**
+
+In `CodexAdapter.run`, replace `read-only` with `workspace-write`.
+
+- [ ] **Step 4: Run focused adapter and immutable-candidate tests**
+
+```powershell
+& 'C:\Users\yangs\AppData\Local\Programs\Python\Python312\python.exe' -m pytest tests\test_cli_capabilities.py tests\test_ninth_wave_contract.py -q
+```
+
+Expected: all selected tests pass; verifier mutations remain outside the reviewed candidate.
+
+- [ ] **Step 5: Commit Task 14**
+
+```powershell
+git add -- src/triagent/adapters/codex.py tests/test_cli_capabilities.py
+git commit -m "fix: allow Codex verification in Windows worktrees"
+```
