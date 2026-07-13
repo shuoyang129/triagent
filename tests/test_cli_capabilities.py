@@ -142,7 +142,7 @@ def test_default_adapter_allowlists_and_redacts_known_environment_secret(agent_r
     assert secret not in result.model_dump_json()
 
 
-def test_codex_runs_noninteractively_and_parses_jsonl_event_stream(agent_request: AgentRequest) -> None:
+def test_codex_verification_uses_workspace_write_and_parses_jsonl_event_stream(agent_request: AgentRequest) -> None:
     stream = "\n".join([
         json.dumps({"type": "thread.started", "thread_id": "t1"}),
         json.dumps({"type": "item.completed", "item": {"type": "reasoning", "text": "private"}}),
@@ -152,7 +152,8 @@ def test_codex_runs_noninteractively_and_parses_jsonl_event_stream(agent_request
     runner = FakeRunner(completed(stream))
     result = CodexAdapter(runner=runner).run(agent_request)
     argv = runner.calls[0][0]
-    assert argv[:4] == ["codex.exe", "exec", "--sandbox", "read-only"]
+    assert argv[:4] == ["codex.exe", "exec", "--sandbox", "workspace-write"]
+    assert "--dangerously-bypass-approvals-and-sandbox" not in argv
     assert "--json" in argv
     assert result.status is AgentStatus.INVALID_OUTPUT
     assert result.summary == "CLI returned non-JSON canonical output"
