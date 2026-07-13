@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 import subprocess
 
+import pytest
+
 
 REQUIRED_TOOLS = {"python", "git", "codex", "cursor", "antigravity", "opencode"}
 REQUIRED_FIELDS = {"installed", "version", "authenticated", "headless"}
@@ -12,7 +14,11 @@ def test_capability_record_has_required_fields() -> None:
     assert set(sample) == REQUIRED_FIELDS
 
 
-def test_generated_capability_file_matches_contract() -> None:
+@pytest.mark.onsite
+def test_generated_capability_file_matches_contract(request) -> None:
+    selected = request.config.getoption("-m")
+    if not selected or "onsite" not in selected:
+        pytest.skip("select explicitly with -m onsite")
     capability_path = Path("work/capabilities/windows.json")
     assert capability_path.is_file()
     payload = json.loads(capability_path.read_text(encoding="utf-8"))
@@ -23,6 +29,11 @@ def test_generated_capability_file_matches_contract() -> None:
         assert capability["version"] is None or isinstance(capability["version"], str)
         assert isinstance(capability["authenticated"], bool)
         assert isinstance(capability["headless"], bool)
+
+
+def test_real_host_capability_contract_is_explicitly_onsite() -> None:
+    marks = getattr(test_generated_capability_file_matches_contract, "pytestmark", [])
+    assert any(mark.name == "onsite" for mark in marks)
 
 def test_native_probe_contract_checks_nonzero_last_exit_code() -> None:
     script = Path("scripts/bootstrap-windows.ps1").read_text(encoding="utf-8")

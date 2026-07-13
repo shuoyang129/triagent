@@ -6,7 +6,7 @@ import json
 
 from triagent.adapters.base import AgentAdapter, AgentRequest, AgentRole, AgentStatus
 from triagent.domain import ReviewSeverity, RiskLevel, StageOutcome, TaskState
-from triagent.store import BudgetExceeded, TaskStore
+from triagent.store import BudgetExceeded, LeaseConflict, TaskStore
 from triagent.adapters.cursor import CursorAdapter
 from triagent.adapters.codex import CodexAdapter
 from triagent.adapters.antigravity import AntigravityAdapter
@@ -200,7 +200,8 @@ class Orchestrator:
             severities = {
                 ReviewSeverity(item["severity"])
                 for item in result.data.get("findings", [])
-                if isinstance(item, dict) and item.get("severity") in ReviewSeverity
+                if isinstance(item, dict)
+                and item.get("severity") in {severity.value for severity in ReviewSeverity}
             }
             if severities & {ReviewSeverity.BLOCKER, ReviewSeverity.MAJOR}:
                 self.store.record_outcome(task_id, self._outcome("review", result, status="failed"))
@@ -240,6 +241,85 @@ class Orchestrator:
                 self.store.transition(task_id,task.state,TaskState.FAILED_RECOVERABLE,"execution-failed")
             raise
         finally: self.store.release_lease(task_id, owner); self._lease_owner=None
+
+    @staticmethod
+    def _repair_limit(risk: RiskLevel) -> int:
+        return 3 if risk in {RiskLevel.HIGH, RiskLevel.ROBOT_SAFETY} else 2
+
+    def resume_until_blocked(self, task_id: str) -> TaskState:
+        owner = str(uuid.uuid4())
+        self.store.acquire_lease(task_id, owner, 600)
+        self._lease_owner = owner
+        try:
+            task = self.store.load(task_id)
+            if task.state is not TaskState.FAILED_RECOVERABLE:
+                raise ValueError("only FAILED_RECOVERABLE tasks can be resumed")
+            failed = [
+                outcome
+                for stage, outcome in self.store.outcomes(task_id).items()
+                if stage in {"implement", "verify", "review"} and outcome.status == "failed"
+            ]
+            if len(failed) != 1:
+                raise ValueError("recoverable failed stage outcome is missing or ambiguous")
+            stage = failed[0].stage
+            target = {
+                "implement": TaskState.IMPLEMENT,
+                "verify": TaskState.VERIFY,
+                "review": TaskState.REVIEW,
+            }[stage]
+            role, schema, adapter = {
+                "implement": (AgentRole.IMPLEMENTER, "implementation-result-v1", self.implementer),
+                "verify": (AgentRole.VERIFIER, "verification-result-v1", self.verifier),
+                "review": (AgentRole.REVIEWER, "review-result-v1", self.reviewer),
+            }[stage]
+            runtime = self.store.runtime(task_id)
+            if runtime.repair_attempts >= self._repair_limit(task.spec.risk):
+                raise ValueError("repair-attempt limit exhausted")
+            request = self._request(task_id, role, schema, adapter)
+            estimate = adapter.estimate_cost(request)
+            if estimate.estimated_usd == 0 and not estimate.zero_cost_enforced:
+                raise BudgetExceeded("zero estimate is not enforced")
+            self.store.assert_agent_call_available(
+                task_id, estimate.estimated_usd, lease_owner=owner
+            )
+            if stage in {"verify", "review"}:
+                self.store.restore_candidate_worktree(task_id)
+            self.store.increment_repair_attempts(task_id)
+            self.store.transition(
+                task_id,
+                TaskState.FAILED_RECOVERABLE,
+                target,
+                f"resume-{stage}",
+            )
+            for _ in range(100):
+                state = self.advance(task_id)
+                if state in BLOCKED_STATES:
+                    return state
+            raise RuntimeError("workflow did not reach a blocked state within 100 transitions")
+        except (ValueError, BudgetExceeded, LeaseConflict):
+            raise
+        except Exception as error:
+            current = self.store.load(task_id)
+            if current.state not in BLOCKED_STATES:
+                self.store.record_outcome(
+                    task_id,
+                    StageOutcome(
+                        stage="setup",
+                        status="failed",
+                        summary="execution-failed",
+                        diagnostic=type(error).__name__,
+                    ),
+                )
+                self.store.transition(
+                    task_id,
+                    current.state,
+                    TaskState.FAILED_RECOVERABLE,
+                    "execution-failed",
+                )
+            raise
+        finally:
+            self.store.release_lease(task_id, owner)
+            self._lease_owner = None
 
     def approve(self, task_id: str, action: str) -> TaskState:
         task = self.store.load(task_id)

@@ -52,7 +52,7 @@ max_usd=5
         def run(self,request):calls["run"]+=1;return super().run(request)
     def deep_factory(*args,**kwargs):calls["factory"]+=1;return DeepStub([])
     monkeypatch.setattr(cli_module,"CursorAdapter",lambda *a,**k:CursorStub([]));monkeypatch.setattr(cli_module,"CodexAdapter",lambda *a,**k:CodexStub([]));monkeypatch.setattr(cli_module,"AntigravityAdapter",lambda *a,**k:AntigravityStub([]));monkeypatch.setattr(cli_module,"DeepSeekAdapter",deep_factory)
-    data=tmp_path/"data";result=CliRunner().invoke(cli_module.app,["run","--profile",str(profile),"--live-confirmed","--billing-confirmed","--data-root",str(data),str(repo),"x"])
+    data=tmp_path/"data";result=CliRunner().invoke(cli_module.app,["run","--risk","low","--acceptance","tests pass","--visual-check","none","--profile",str(profile),"--live-confirmed","--billing-confirmed","--data-root",str(data),str(repo),"x"])
     assert result.exit_code!=0 and "task setup failed" in result.output
     assert calls=={"factory":0,"capabilities":0,"run":0}
     task_id=next((data/"runs").iterdir()).name

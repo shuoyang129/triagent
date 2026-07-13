@@ -13,11 +13,12 @@ from triagent.adapters.antigravity import AntigravityAdapter
 from triagent.adapters.base import AgentRole
 from triagent.adapters.codex import CodexAdapter
 from triagent.adapters.cursor import CursorAdapter
+from triagent.adapters.fake import FakeAgent
 from triagent.adapters.process import ProcessResult
 from triagent.domain import Budget, RiskLevel, StageOutcome, TaskSpec, TaskState
 from triagent.git_workspace import GitWorkspace
 from triagent.orchestrator import Orchestrator
-from triagent.store import TaskStore
+from triagent.store import BudgetExceeded, TaskStore
 
 
 def _png_chunk(kind:bytes,payload:bytes)->bytes:
@@ -41,7 +42,7 @@ def init_repo(path: Path, extra: dict[str, bytes] | None = None) -> str:
 def workspace_store(tmp_path: Path, *, visual: bool = False, extra: dict[str, bytes] | None = None):
     repo = tmp_path / "repo"; base = init_repo(repo, extra)
     store = TaskStore(tmp_path / "data")
-    spec = TaskSpec(goal="x", scope=["x"], acceptance=["x"], risk=RiskLevel.ROBOT_SAFETY if visual else RiskLevel.LOW, budget=Budget(max_usd=3))
+    spec = TaskSpec(goal="x", scope=[str(repo)], acceptance=["x"], risk=RiskLevel.ROBOT_SAFETY if visual else RiskLevel.LOW, budget=Budget(max_usd=3))
     task = store.create_task(spec)
     work = store.runs_root / task.id / "worktree"; work.rmdir()
     ws = GitWorkspace.create(repo, task.id, destination=work)
@@ -65,6 +66,92 @@ def strict(role: AgentRole) -> dict:
     if role is AgentRole.IMPLEMENTER: value["changed_paths"] = ["candidate.txt"]
     if role is AgentRole.REVIEWER: value["findings"] = []
     return value
+
+
+def test_verify_failure_resumes_with_codex_without_second_cursor_call(tmp_path):
+    store, task, work, _ = workspace_store(tmp_path)
+
+    class ImplementRunner(StageRunner):
+        def run(self, argv, cwd, timeout, env, stdin=None):
+            (Path(cwd) / "candidate.txt").write_text("candidate", encoding="utf-8")
+            return super().run(argv, cwd, timeout, env, stdin)
+
+    cursor_output = ProcessResult(0, json.dumps({
+        "type": "result", "subtype": "success", "is_error": False,
+        "result": json.dumps(strict(AgentRole.IMPLEMENTER)), "total_cost_usd": .1,
+    }), "", False)
+    failed_verify = strict(AgentRole.VERIFIER) | {"status": "failed"}
+    initial_codex = StageRunner(ProcessResult(0, json.dumps({
+        "type": "item.completed",
+        "item": {"type": "agent_message", "text": json.dumps(failed_verify)},
+    }), "", False))
+    initial_cursor = ImplementRunner(cursor_output)
+    unused_review = StageRunner(ProcessResult(0, "{}", "", False))
+    initial = Orchestrator(
+        store,
+        CursorAdapter(runner=initial_cursor, estimated_usd=.5),
+        CodexAdapter(runner=initial_codex, estimated_usd=.5),
+        AntigravityAdapter(runner=unused_review, estimated_usd=.5, acl_verifier=lambda d, f: True),
+    )
+
+    assert initial.run_until_blocked(task.id) is TaskState.FAILED_RECOVERABLE
+    assert len(initial_cursor.inputs) == 1
+    assert len(initial_codex.inputs) == 1
+    assert unused_review.inputs == []
+    (work / "unreviewed.txt").write_text("remove me", encoding="utf-8")
+
+    resume_cursor = StageRunner(cursor_output)
+    resumed_codex = StageRunner(ProcessResult(0, json.dumps({
+        "type": "item.completed",
+        "item": {"type": "agent_message", "text": json.dumps(strict(AgentRole.VERIFIER))},
+    }), "", False))
+    resumed_review = StageRunner(ProcessResult(
+        0, json.dumps(strict(AgentRole.REVIEWER) | {"actual_usd": .1}), "", False
+    ))
+    resumed = Orchestrator(
+        store,
+        CursorAdapter(runner=resume_cursor, estimated_usd=.5),
+        CodexAdapter(runner=resumed_codex, estimated_usd=.5),
+        AntigravityAdapter(runner=resumed_review, estimated_usd=.5, acl_verifier=lambda d, f: True),
+    )
+
+    assert resumed.resume_until_blocked(task.id) is TaskState.APPROVAL
+    assert store.load(task.id).id == task.id
+    assert resume_cursor.inputs == []
+    assert len(resumed_codex.inputs) == 1
+    assert len(resumed_review.inputs) == 1
+    assert not (work / "unreviewed.txt").exists()
+    assert store.runtime(task.id).repair_attempts == 1
+
+
+def test_resume_rejects_invalid_state_missing_outcome_and_exhausted_limits(tmp_path):
+    cases = []
+    for name in ("invalid", "missing", "repairs", "budget"):
+        root = tmp_path / name
+        store = TaskStore(root)
+        max_calls = 0 if name == "budget" else 20
+        task = store.create_task(TaskSpec(
+            goal="x", scope=[str(root)], acceptance=["x"],
+            budget=Budget(max_agent_calls=max_calls, max_usd=0),
+        ))
+        if name != "invalid":
+            store.transition(task.id, TaskState.SPEC, TaskState.FAILED_RECOVERABLE, "test")
+        if name in {"repairs", "budget"}:
+            store.record_outcome(task.id, StageOutcome(
+                stage="verify", status="failed", summary="requires-repair"
+            ))
+        if name == "repairs":
+            store.increment_repair_attempts(task.id)
+            store.increment_repair_attempts(task.id)
+        agents = (FakeAgent([]), FakeAgent([]), FakeAgent([]))
+        cases.append((name, Orchestrator(store, *agents), store, task, agents))
+
+    for name, orchestrator, store, task, agents in cases:
+        expected = BudgetExceeded if name == "budget" else ValueError
+        with pytest.raises(expected):
+            orchestrator.resume_until_blocked(task.id)
+        assert all(agent.requests == [] for agent in agents)
+        assert store.runtime(task.id).repair_attempts == (2 if name == "repairs" else 0)
 
 
 def test_candidate_exists_before_verify_and_reviewer_mutations_never_enter_it(tmp_path):

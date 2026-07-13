@@ -79,7 +79,7 @@ def test_handoff_diff_uses_persisted_base_and_all_change_categories(tmp_path):
     subprocess.run(["git","config","user.email","x@y"],cwd=repo,check=True); subprocess.run(["git","config","user.name","x"],cwd=repo,check=True)
     for name in ("committed.txt","staged.txt","unstaged.txt"): (repo/name).write_text("base\n",encoding="utf-8")
     subprocess.run(["git","add","."],cwd=repo,check=True); subprocess.run(["git","commit","-qm","base"],cwd=repo,check=True)
-    store=TaskStore(tmp_path/"data"); task=store.create_task(spec()); dest=store.runs_root/task.id/"worktree"; dest.rmdir()
+    store=TaskStore(tmp_path/"data"); task=store.create_task(spec().model_copy(update={"scope":[str(repo)]})); dest=store.runs_root/task.id/"worktree"; dest.rmdir()
     ws=GitWorkspace.create(repo,task.id,destination=dest); store.set_workspace(task.id,str(repo),ws.base_commit,f"triagent/{task.id}")
     (dest/"committed.txt").write_text("committed-change\n",encoding="utf-8"); subprocess.run(["git","add","committed.txt"],cwd=dest,check=True); subprocess.run(["git","commit","-qm","change"],cwd=dest,check=True)
     (dest/"staged.txt").write_text("staged-change\n",encoding="utf-8"); subprocess.run(["git","add","staged.txt"],cwd=dest,check=True)

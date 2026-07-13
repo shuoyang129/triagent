@@ -123,7 +123,7 @@ def test_approval_consumption_stays_bound_to_materialized_commit(tmp_path):
     repo = tmp_path / "repo"
     base = _init_repo(repo)
     store = TaskStore(tmp_path / "data")
-    task = store.create_task(TaskSpec(goal="x", scope=["x"], acceptance=["x"]))
+    task = store.create_task(TaskSpec(goal="x", scope=[str(repo)], acceptance=["x"]))
     work = store.runs_root / task.id / "worktree"
     work.rmdir()
     shutil.copytree(repo, work)
@@ -150,7 +150,7 @@ def test_cleanup_failure_persists_sanitized_attention(tmp_path, monkeypatch):
 
 def test_run_precreation_errors_are_categorical_and_path_free(tmp_path):
     missing = tmp_path / "private" / "profile.toml"
-    result = CliRunner().invoke(app, ["run", str(tmp_path), "x", "--profile", str(missing), "--live-confirmed", "--billing-confirmed", "--data-root", str(tmp_path / "data")])
+    result = CliRunner().invoke(app, ["run", str(tmp_path), "x", "--risk", "low", "--acceptance", "tests pass", "--visual-check", "none", "--profile", str(missing), "--live-confirmed", "--billing-confirmed", "--data-root", str(tmp_path / "data")])
     assert result.exit_code != 0
     assert str(missing) not in result.output
     assert "task input validation failed" in result.output

@@ -27,7 +27,7 @@ def init_repo(path:Path,extra:dict[str,bytes]|None=None)->str:
 
 
 def setup(tmp_path:Path,extra:dict[str,bytes]|None=None):
-    repo=tmp_path/"repo";base=init_repo(repo,extra);store=TaskStore(tmp_path/"data");task=store.create_task(TaskSpec(goal="x",scope=["x"],acceptance=["x"]))
+    repo=tmp_path/"repo";base=init_repo(repo,extra);store=TaskStore(tmp_path/"data");task=store.create_task(TaskSpec(goal="x",scope=[str(repo)],acceptance=["x"]))
     work=store.runs_root/task.id/"worktree";work.rmdir();ws=GitWorkspace.create(repo,task.id,destination=work);store.set_workspace(task.id,str(repo),base,f"triagent/{task.id}")
     return store,task,work,ws
 

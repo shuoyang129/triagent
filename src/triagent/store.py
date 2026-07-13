@@ -227,6 +227,50 @@ class TaskStore:
         except Exception: connection.rollback(); raise
         finally: connection.close()
 
+    def assert_agent_call_available(
+        self,
+        task_id: str,
+        estimated_usd: float | None,
+        *,
+        lease_owner: str,
+    ) -> None:
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            task = connection.execute(
+                "SELECT spec_json FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            runtime = connection.execute(
+                "SELECT * FROM task_runtime WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if task is None or runtime is None:
+                raise KeyError(task_id)
+            import time
+            if (
+                runtime["lease_owner"] != lease_owner
+                or runtime["lease_until"] is None
+                or runtime["lease_until"] < time.time()
+            ):
+                raise LeaseConflict("controller lease is not owned")
+            if estimated_usd is None:
+                raise BudgetExceeded("unknown call cost cannot be reserved conservatively")
+            spec = TaskSpec.model_validate_json(task["spec_json"])
+            now = datetime.now(UTC)
+            started = datetime.fromisoformat(runtime["started_at"]) if runtime["started_at"] else now
+            if (
+                runtime["agent_calls"] >= spec.budget.max_agent_calls
+                or (now - started).total_seconds() >= spec.budget.max_minutes * 60
+            ):
+                raise BudgetExceeded("call or elapsed-time budget exhausted")
+            pending = connection.execute(
+                "SELECT COALESCE(SUM(estimated_usd),0) FROM agent_calls WHERE task_id=? AND status='started'",
+                (task_id,),
+            ).fetchone()[0]
+            if runtime["usd_spent"] + pending + estimated_usd > spec.budget.max_usd:
+                raise BudgetExceeded("USD budget exhausted")
+        finally:
+            connection.close()
+
     def _finish_call(self, task_id: str, call_id: str, status: str, actual_usd: float | None, diagnostic: str = "") -> None:
         column = "completed_calls" if status == "completed" else "interrupted_calls"
         with self._connect() as connection:
@@ -278,6 +322,68 @@ class TaskStore:
             "GIT_COMMITTER_NAME":"TriAgent Controller","GIT_COMMITTER_EMAIL":"triagent@localhost",
         }
         return run_git(work,args,stdin=stdin,extra_env=environment).stdout
+
+    @staticmethod
+    def _declared_repo_path(raw: str, repo: Path, *, diagnostic: str) -> str:
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError(diagnostic)
+        raw = raw.strip()
+        candidate = Path(raw)
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+            if resolved == repo:
+                return ""
+            if repo not in resolved.parents:
+                raise ValueError(diagnostic)
+            return resolved.relative_to(repo).as_posix().rstrip("/")
+        normalized = raw.replace("\\", "/")
+        path = PurePosixPath(normalized)
+        if path.is_absolute() or any(part in {"", ".."} for part in path.parts):
+            raise ValueError(diagnostic)
+        if path == PurePosixPath("."):
+            return ""
+        return path.as_posix().rstrip("/")
+
+    @staticmethod
+    def _path_matches(relative: str, declaration: str) -> bool:
+        return declaration == "" or relative == declaration or relative.startswith(declaration + "/")
+
+    def _enforce_candidate_scope(self, task_id: str, actual_changes: set[str]) -> None:
+        task = self.load(task_id)
+        meta = self.workspace(task_id)
+        if meta is None:
+            raise ValueError("candidate scope rejected: invalid scope")
+        repo = Path(meta["repo"]).resolve()
+        scopes = [
+            self._declared_repo_path(
+                item, repo, diagnostic="candidate scope rejected: invalid scope"
+            )
+            for item in task.spec.scope
+        ]
+        if not scopes:
+            raise ValueError("candidate scope rejected: invalid scope")
+        for relative in actual_changes:
+            if not any(self._path_matches(relative, scope) for scope in scopes):
+                raise ValueError("candidate scope rejected: out of scope")
+
+        forbidden_paths = []
+        for item in task.spec.forbidden:
+            if not isinstance(item, str) or not item.strip():
+                continue
+            value = item.strip()
+            path_like = Path(value).is_absolute() or "/" in value or "\\" in value or not any(char.isspace() for char in value)
+            if not path_like:
+                continue
+            forbidden_paths.append(
+                self._declared_repo_path(
+                    value,
+                    repo,
+                    diagnostic="candidate scope rejected: invalid forbidden path",
+                )
+            )
+        for relative in actual_changes:
+            if any(self._path_matches(relative, forbidden) for forbidden in forbidden_paths):
+                raise ValueError("candidate scope rejected: forbidden path")
 
     def _candidate_manifest(
         self,
@@ -347,6 +453,7 @@ class TaskStore:
                 try:total_bytes+=target.stat().st_size
                 except OSError as error:raise ValueError("candidate manifest rejected") from error
                 if total_bytes>_MAX_CHANGED_BYTES:raise ValueError("candidate limits exceeded")
+        self._enforce_candidate_scope(task_id, actual_changes)
         control_names={name for name in actual_changes if PurePosixPath(name).name in control_basenames}
         if control_names:raise ValueError("candidate manifest rejected")
         manifest={}
@@ -444,7 +551,7 @@ class TaskStore:
             self._git_plumbing(work,["update-ref",candidate_ref,reviewed,prior_ref or "0"*40])
             if self._git_plumbing(work,["rev-parse",candidate_ref]).decode().strip()!=reviewed:raise ValueError("candidate ref mismatch")
         except (OSError,subprocess.CalledProcessError,UnicodeError,ValueError) as error:
-            if isinstance(error,ValueError) and str(error).startswith(("candidate manifest rejected","changed path manifest mismatch","candidate limits exceeded")):raise
+            if isinstance(error,ValueError) and str(error).startswith(("candidate manifest rejected","changed path manifest mismatch","candidate limits exceeded","candidate scope rejected")):raise
             raise ValueError("candidate materialization failed") from error
         old=meta["reviewed_commit"] or ""
         try:persisted=self._persist_candidate(task_id,reviewed,candidate_ref,old)

@@ -32,6 +32,24 @@ powershell -ExecutionPolicy Bypass -File scripts/bootstrap-windows.ps1 -Output w
 
 The output contains booleans and version strings only. It must never contain access tokens, cookies, API keys, or private-key material.
 
+## Create, run, and resume tasks
+
+`create` and `run` require an explicit risk declaration and at least one repeatable acceptance criterion. `--forbidden` is repeatable for excluded paths or constraints. Declare the visual-verification mode with `--visual-check`; robot-safety risk always forces it to `required`.
+
+```powershell
+triagent create --risk low --acceptance "unit tests pass" --visual-check none C:\src\project "Add a health endpoint"
+triagent run --profile fake --risk low --acceptance "unit tests pass" --forbidden secrets\ --visual-check none C:\src\project "Add a health endpoint"
+```
+
+Resume only an existing `FAILED_RECOVERABLE` task. The task ID is preserved, the persisted failed stage is retried, earlier passed stages are not repeated, and remaining repair/call/time/USD limits still apply.
+
+```powershell
+triagent resume --profile fake TASK_ID
+triagent resume --profile profiles\windows.example.toml --live-confirmed --billing-confirmed TASK_ID
+```
+
+Non-fake `run` and `resume` commands require both live and billing confirmation. Missing flags, profile commands, failed-stage evidence, or remaining budget fail closed.
+
 ## Known first-phase boundary
 
 Passing this bootstrap proves only that the travel Windows host can run the local tools. It does not prove DGX, Isaac, LAN SSH, ChatGPT Remote, or Tencent Cloud relay integration.

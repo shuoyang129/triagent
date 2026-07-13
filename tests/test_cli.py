@@ -6,11 +6,105 @@ from typer.testing import CliRunner
 
 from triagent.cli import app
 import triagent.cli as cli_module
+from triagent.domain import RiskLevel, StageOutcome, TaskSpec, TaskState
 from triagent.report import REPORT_FIELDS
 from triagent.report import render_report
+from triagent.store import TaskStore
 
 
 runner = CliRunner()
+
+
+def structured_args(*, risk: str = "low") -> list[str]:
+    return ["--risk", risk, "--acceptance", "tests pass", "--visual-check", "none"]
+
+
+def test_create_requires_explicit_risk_and_acceptance_before_task_creation(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+
+    missing_risk = runner.invoke(app, ["create", "--acceptance", "tests pass", str(tmp_path), "goal"])
+    missing_acceptance = runner.invoke(app, ["create", "--risk", "low", str(tmp_path), "goal"])
+
+    assert missing_risk.exit_code != 0
+    assert missing_acceptance.exit_code != 0
+    assert not (data / "triagent.sqlite3").exists()
+
+
+def test_create_persists_explicit_structured_spec_inputs(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    result = runner.invoke(app, [
+        "create", "--data-root", str(data), "--risk", "medium",
+        "--acceptance", "unit tests pass", "--acceptance", "docs updated",
+        "--forbidden", "secrets/", "--forbidden", "deploy.py",
+        "--visual-check", "optional", str(tmp_path), "goal",
+    ])
+
+    assert result.exit_code == 0, result.output
+    task_id = result.output.split("Task: ", 1)[1].splitlines()[0]
+    spec = TaskStore(data).load(task_id).spec
+    assert spec.risk is RiskLevel.MEDIUM
+    assert spec.acceptance == ["unit tests pass", "docs updated"]
+    assert spec.forbidden == ["secrets/", "deploy.py"]
+    assert spec.visual_check == "optional"
+    assert spec.scope == [str(tmp_path.resolve())]
+
+
+def test_robot_safety_cli_forces_required_visual_check(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    result = runner.invoke(app, [
+        "create", "--data-root", str(data), "--risk", "robot-safety",
+        "--acceptance", "safe stop verified", "--visual-check", "none",
+        str(tmp_path), "goal",
+    ])
+
+    assert result.exit_code == 0, result.output
+    task_id = result.output.split("Task: ", 1)[1].splitlines()[0]
+    assert TaskStore(data).load(task_id).spec.visual_check == "required"
+
+
+def test_resume_cli_preserves_task_id_and_reaches_approval(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    store = TaskStore(data)
+    task = store.create_task(TaskSpec(
+        goal="goal", scope=[str(tmp_path)], acceptance=["tests pass"]
+    ))
+    store.record_outcome(task.id, StageOutcome(
+        stage="implement", status="failed", summary="requires-repair"
+    ))
+    store.transition(task.id, TaskState.SPEC, TaskState.FAILED_RECOVERABLE, "test")
+
+    result = runner.invoke(app, [
+        "resume", "--profile", "fake", "--data-root", str(data), task.id
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert f"Task: {task.id}" in result.output
+    assert "State: APPROVAL" in result.output
+    assert store.runtime(task.id).repair_attempts == 1
+
+
+def test_resume_cli_real_profile_requires_gates_and_available_configuration(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    store = TaskStore(data)
+    task = store.create_task(TaskSpec(
+        goal="goal", scope=[str(tmp_path)], acceptance=["tests pass"]
+    ))
+    store.record_outcome(task.id, StageOutcome(
+        stage="implement", status="failed", summary="requires-repair"
+    ))
+    store.transition(task.id, TaskState.SPEC, TaskState.FAILED_RECOVERABLE, "test")
+    missing = tmp_path / "missing.toml"
+
+    gated = runner.invoke(app, ["resume", "--profile", str(missing), "--data-root", str(data), task.id])
+    unavailable = runner.invoke(app, [
+        "resume", "--profile", str(missing), "--live-confirmed", "--billing-confirmed",
+        "--data-root", str(data), task.id,
+    ])
+
+    assert gated.exit_code != 0
+    assert unavailable.exit_code != 0
+    assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
+    assert store.runtime(task.id).repair_attempts == 0
 
 
 def test_fake_run_reaches_approval_writes_safe_report_and_preserves_checkout(tmp_path: Path) -> None:
@@ -23,7 +117,7 @@ def test_fake_run_reaches_approval_writes_safe_report_and_preserves_checkout(tmp
     subprocess.run(["git", "config", "user.name", "Fake Test"], cwd=repo, check=True)
     subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "fixture"], cwd=repo, check=True)
-    result = runner.invoke(app, ["run", "--profile", "fake", "--data-root", str(tmp_path / "data"), str(repo), "add a health endpoint"])
+    result = runner.invoke(app, ["run", *structured_args(), "--profile", "fake", "--data-root", str(tmp_path / "data"), str(repo), "add a health endpoint"])
     assert result.exit_code == 0, result.output
     assert "State: APPROVAL" in result.output
     reports = list((tmp_path / "data" / "runs").glob("*/final-report.md"))
@@ -35,16 +129,25 @@ def test_fake_run_reaches_approval_writes_safe_report_and_preserves_checkout(tmp
 
 
 def test_exact_fixture_run_uses_persistent_git_worktree_and_preserves_source(tmp_path: Path) -> None:
-    fixture = Path("tests/fixtures/sample-repo").resolve()
-    before = (fixture / "README.md").read_text(encoding="utf-8")
+    fixture_source = Path("tests/fixtures/sample-repo/README.md").resolve()
+    source_before = fixture_source.read_text(encoding="utf-8")
+    fixture = tmp_path / "sample-repo"
+    fixture.mkdir()
+    (fixture / "README.md").write_text(source_before, encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=fixture, check=True)
+    subprocess.run(["git", "config", "user.email", "fake@example.invalid"], cwd=fixture, check=True)
+    subprocess.run(["git", "config", "user.name", "Fake Test"], cwd=fixture, check=True)
+    subprocess.run(["git", "add", "README.md"], cwd=fixture, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=fixture, check=True)
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=fixture, check=True, capture_output=True, text=True).stdout.strip()
-    result = runner.invoke(app, ["run", "--profile", "fake", "--data-root", str(tmp_path / "data"), str(fixture), "add a health endpoint"])
+    result = runner.invoke(app, ["run", *structured_args(), "--profile", "fake", "--data-root", str(tmp_path / "data"), str(fixture), "add a health endpoint"])
     assert result.exit_code == 0, result.output
     task_id = result.output.split("Task: ", 1)[1].splitlines()[0]
     isolated = tmp_path / "data" / "runs" / task_id / "worktree"
     assert (isolated / ".git").exists()
     assert (isolated / "health-endpoint.txt").read_text(encoding="utf-8") == "ok\n"
-    assert (fixture / "README.md").read_text(encoding="utf-8") == before
+    assert (fixture / "README.md").read_text(encoding="utf-8") == source_before
+    assert fixture_source.read_text(encoding="utf-8") == source_before
     assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=fixture, check=True, capture_output=True, text=True).stdout.strip() == head
     subprocess.run(["git", "worktree", "remove", "--force", str(isolated)], cwd=fixture, check=True)
 
@@ -62,7 +165,7 @@ def test_exact_default_root_invocation_isolated_and_preserves_fixture(tmp_path: 
     source_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=fixture, check=True, capture_output=True, text=True).stdout.strip()
 
     monkeypatch.chdir(tmp_path)
-    result = runner.invoke(app, ["run", "--profile", "fake", "tests/fixtures/sample-repo", "add a health endpoint"])
+    result = runner.invoke(app, ["run", *structured_args(), "--profile", "fake", "tests/fixtures/sample-repo", "add a health endpoint"])
 
     assert result.exit_code == 0, result.output
     assert "State: APPROVAL" in result.output
@@ -92,7 +195,7 @@ def test_legacy_report_redacts_credentials(monkeypatch) -> None:
 
 def test_create_status_approve_report_and_doctor_are_operator_readable(tmp_path: Path) -> None:
     data = tmp_path / "data"
-    created = runner.invoke(app, ["create", "--data-root", str(data), str(tmp_path), "document the project"])
+    created = runner.invoke(app, ["create", *structured_args(), "--data-root", str(data), str(tmp_path), "document the project"])
     assert created.exit_code == 0
     task_id = created.output.split("Task: ", 1)[1].splitlines()[0]
     status = runner.invoke(app, ["status", "--data-root", str(data), task_id])

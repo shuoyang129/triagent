@@ -35,10 +35,51 @@ def init_repo(path:Path,extra:dict[str,bytes]|None=None)->str:
     return subprocess.run(["git","rev-parse","HEAD"],cwd=path,check=True,capture_output=True,text=True).stdout.strip()
 
 
-def setup(tmp_path:Path,extra:dict[str,bytes]|None=None):
-    repo=tmp_path/"repo";base=init_repo(repo,extra);store=TaskStore(tmp_path/"data");task=store.create_task(TaskSpec(goal="x",scope=["x"],acceptance=["x"]))
+def setup(tmp_path:Path,extra:dict[str,bytes]|None=None,*,scope:list[str]|None=None,forbidden:list[str]|None=None):
+    repo=tmp_path/"repo";base=init_repo(repo,extra);store=TaskStore(tmp_path/"data");task=store.create_task(TaskSpec(goal="x",scope=scope or [str(repo)],acceptance=["x"],forbidden=forbidden or []))
     work=store.runs_root/task.id/"worktree";work.rmdir();ws=GitWorkspace.create(repo,task.id,destination=work);store.set_workspace(task.id,str(repo),base,f"triagent/{task.id}")
     return store,task,work
+
+
+@pytest.mark.parametrize(
+    "scope,forbidden,changed,diagnostic",
+    [
+        (["allowed/"], [], "outside.txt", "candidate scope rejected: out of scope"),
+        (["."], ["blocked/"], "blocked/change.txt", "candidate scope rejected: forbidden path"),
+        (["."], ["exact.txt"], "exact.txt", "candidate scope rejected: forbidden path"),
+    ],
+)
+def test_actual_changes_outside_scope_or_forbidden_never_reach_reviewed_commit(
+    tmp_path, scope, forbidden, changed, diagnostic
+):
+    store, task, work = setup(tmp_path, scope=scope, forbidden=forbidden)
+    target = work / changed
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("rejected", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=diagnostic):
+        store.materialize_reviewed_commit(task.id, [changed])
+
+    meta = store.workspace(task.id)
+    assert meta["reviewed_commit"] is None
+    assert subprocess.run(
+        ["git", "rev-parse", "--verify", f"refs/triagent/reviewed/{task.id}"],
+        cwd=work,
+        capture_output=True,
+    ).returncode != 0
+
+
+@pytest.mark.parametrize("scope", [["../escape"], ["ABSOLUTE_OUTSIDE"]])
+def test_invalid_or_outside_repository_scope_fails_closed(tmp_path, scope):
+    if scope == ["ABSOLUTE_OUTSIDE"]:
+        scope = [str((tmp_path / "outside").resolve())]
+    store, task, work = setup(tmp_path, scope=scope)
+    (work / "change.txt").write_text("rejected", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="candidate scope rejected: invalid scope"):
+        store.materialize_reviewed_commit(task.id, ["change.txt"])
+
+    assert store.workspace(task.id)["reviewed_commit"] is None
 
 
 def test_strict_implementer_output_requires_changed_paths(tmp_path):
@@ -134,7 +175,7 @@ def test_nested_base_files_preserved_and_gitlinks_rejected(tmp_path):
     assert (work/"nested/deep/base.txt").read_bytes()==b"nested"
     repo=tmp_path/"gitlink";base=init_repo(repo);sub=base
     subprocess.run(["git","update-index","--add","--cacheinfo",f"160000,{sub},linked"],cwd=repo,check=True);subprocess.run(["git","commit","-qm","gitlink"],cwd=repo,check=True)
-    store2=TaskStore(tmp_path/"data2");task2=store2.create_task(TaskSpec(goal="x",scope=["x"],acceptance=["x"]));work2=store2.runs_root/task2.id/"worktree";work2.rmdir();ws=GitWorkspace.create(repo,task2.id,destination=work2);store2.set_workspace(task2.id,str(repo),ws.base_commit,f"triagent/{task2.id}")
+    store2=TaskStore(tmp_path/"data2");task2=store2.create_task(TaskSpec(goal="x",scope=[str(repo)],acceptance=["x"]));work2=store2.runs_root/task2.id/"worktree";work2.rmdir();ws=GitWorkspace.create(repo,task2.id,destination=work2);store2.set_workspace(task2.id,str(repo),ws.base_commit,f"triagent/{task2.id}")
     with pytest.raises(ValueError,match="gitlink"):store2.materialize_reviewed_commit(task2.id,[])
 
 

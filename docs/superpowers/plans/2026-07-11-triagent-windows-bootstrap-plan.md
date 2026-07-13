@@ -401,7 +401,7 @@ Expected: PASS.
 
 - [ ] **Step 5: 运行本地模拟端到端任务**
 
-Run: `triagent run --profile fake tests/fixtures/sample-repo "add a health endpoint"`  
+Run: `triagent run --profile fake --risk low --acceptance "tests pass" --visual-check none tests/fixtures/sample-repo "add a health endpoint"`
 Expected: 状态到`APPROVAL`，产生`final-report.md`，主工作区未改变。
 
 - [ ] **Step 6: 提交**

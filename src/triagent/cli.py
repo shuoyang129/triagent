@@ -4,7 +4,7 @@ import os
 import math
 import tomllib
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
 
@@ -14,7 +14,7 @@ from triagent.adapters.codex import CodexAdapter
 from triagent.adapters.cursor import CursorAdapter
 from triagent.adapters.deepseek import DeepSeekAdapter
 from triagent.adapters.fake import FakeAgent
-from triagent.domain import Budget, TaskSpec, TaskState
+from triagent.domain import Budget, RiskLevel, TaskSpec, TaskState
 from triagent.git_workspace import GitWorkspace
 from triagent.orchestrator import Orchestrator
 from triagent.report import render_persisted_report
@@ -24,14 +24,41 @@ from triagent.store import TaskStore
 
 app = typer.Typer(no_args_is_help=True, help="Run and inspect TriAgent tasks.")
 DataRoot = Annotated[Path, typer.Option(help="TriAgent state directory.")]
+RiskOption = Annotated[RiskLevel, typer.Option("--risk", help="Declared task risk level.")]
+AcceptanceOptions = Annotated[list[str], typer.Option("--acceptance", help="Repeatable acceptance criterion.")]
+ForbiddenOptions = Annotated[list[str], typer.Option("--forbidden", help="Repeatable forbidden path or constraint.")]
+VisualCheckOption = Annotated[
+    Literal["required", "optional", "none"],
+    typer.Option("--visual-check", help="Required, optional, or no visual verification."),
+]
 
 
 def _root(value: Path | None) -> Path:
     return value or Path(os.environ.get("TRIAGENT_HOME", ".triagent"))
 
 
-def _spec(repo: Path, goal: str, budget: Budget | None = None) -> TaskSpec:
-    return TaskSpec(goal=goal, scope=[str(repo.resolve())], acceptance=["requested outcome implemented", "tests pass"], budget=budget or Budget())
+def _spec(
+    repo: Path,
+    goal: str,
+    risk: RiskLevel,
+    acceptance: list[str],
+    forbidden: list[str] | None = None,
+    visual_check: Literal["required", "optional", "none"] = "none",
+    budget: Budget | None = None,
+) -> TaskSpec:
+    if not acceptance or not all(item.strip() for item in acceptance):
+        raise ValueError("at least one non-empty acceptance criterion is required")
+    if forbidden and not all(item.strip() for item in forbidden):
+        raise ValueError("forbidden constraints must be non-empty")
+    return TaskSpec(
+        goal=goal,
+        scope=[str(repo.resolve())],
+        acceptance=acceptance,
+        risk=risk,
+        forbidden=forbidden or [],
+        visual_check=visual_check,
+        budget=budget or Budget(),
+    )
 
 def _priced(config: dict, name: str, field: str = "estimated_usd") -> float | None:
     value=config.get("agents",{}).get(name,{}).get(field)
@@ -58,16 +85,28 @@ def _status(value: bool | None) -> str:
 
 
 @app.command()
-def create(repo: Path, goal: str, data_root: DataRoot = None) -> None:
+def create(
+    repo: Path,
+    goal: str,
+    risk: RiskOption,
+    acceptance: AcceptanceOptions,
+    forbidden: ForbiddenOptions = None,
+    visual_check: VisualCheckOption = "none",
+    data_root: DataRoot = None,
+) -> None:
     try:
-        task = TaskStore(_root(data_root)).create_task(_spec(repo, goal))
+        task = TaskStore(_root(data_root)).create_task(
+            _spec(repo, goal, risk, acceptance, forbidden, visual_check)
+        )
     except Exception:
         raise typer.BadParameter("task creation failed") from None
     typer.echo(f"Task: {task.id}\nState: {task.state.value}")
 
 
 @app.command()
-def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake", data_root: DataRoot = None,
+def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
+        forbidden: ForbiddenOptions = None, visual_check: VisualCheckOption = "none",
+        profile: Annotated[str, typer.Option()] = "fake", data_root: DataRoot = None,
         live_confirmed: Annotated[bool, typer.Option("--live-confirmed")] = False,
         billing_confirmed: Annotated[bool, typer.Option("--billing-confirmed")] = False) -> None:
     if profile != "fake" and not (live_confirmed and billing_confirmed):
@@ -88,7 +127,9 @@ def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake",
     except (OSError,tomllib.TOMLDecodeError,ValueError,TypeError,RuntimeError):
         raise typer.BadParameter("task input validation failed") from None
     try:
-        store = TaskStore(_root(data_root)); task = store.create_task(_spec(repo, goal, budget))
+        store = TaskStore(_root(data_root)); task = store.create_task(
+            _spec(repo, goal, risk, acceptance, forbidden, visual_check, budget)
+        )
     except Exception:
         raise typer.BadParameter("task creation failed") from None
     run_worktree = store.runs_root / task.id / "worktree"
@@ -123,6 +164,57 @@ def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake",
         raise typer.BadParameter("task setup failed; inspect persisted task status") from error
     (store.runs_root / task.id / "final-report.md").write_text(render_persisted_report(store, task.id), encoding="utf-8")
     typer.echo(f"Task: {task.id}\nState: {state.value}\nReport: {store.runs_root / task.id / 'final-report.md'}")
+
+
+@app.command()
+def resume(
+    task_id: str,
+    profile: Annotated[str, typer.Option()] = "fake",
+    data_root: DataRoot = None,
+    live_confirmed: Annotated[bool, typer.Option("--live-confirmed")] = False,
+    billing_confirmed: Annotated[bool, typer.Option("--billing-confirmed")] = False,
+) -> None:
+    if profile != "fake" and not (live_confirmed and billing_confirmed):
+        raise typer.BadParameter("real profiles require --live-confirmed and --billing-confirmed")
+    store = TaskStore(_root(data_root))
+    try:
+        store.load(task_id)
+        if profile == "fake":
+            success = AgentResult(
+                status=AgentStatus.SUCCEEDED,
+                data={"status": "passed", "summary_code": "completed", "evidence": []},
+            )
+            orchestrator = Orchestrator(
+                store, FakeAgent([success]), FakeAgent([success]), FakeAgent([success])
+            )
+        else:
+            config = tomllib.loads(Path(profile).read_text(encoding="utf-8"))
+            for agent in ("cursor", "codex", "antigravity"):
+                _profile_command(config, agent)
+            orchestrator = Orchestrator(
+                store,
+                CursorAdapter(
+                    command=_profile_command(config, "cursor"),
+                    deepseek_billing_confirmed=False,
+                    estimated_usd=_priced(config, "cursor"),
+                ),
+                CodexAdapter(
+                    command=_profile_command(config, "codex"),
+                    estimated_usd=_priced(config, "codex"),
+                ),
+                AntigravityAdapter(
+                    command=_profile_command(config, "antigravity"),
+                    estimated_usd=_priced(config, "antigravity"),
+                ),
+            )
+            store.record_attestation(task_id, "live-confirmed", True)
+            store.record_attestation(task_id, "billing-confirmed", True)
+        state = orchestrator.resume_until_blocked(task_id)
+    except (OSError, tomllib.TOMLDecodeError, KeyError, ValueError, RuntimeError):
+        raise typer.BadParameter("task resume refused; inspect persisted task status") from None
+    report_path = store.runs_root / task_id / "final-report.md"
+    report_path.write_text(render_persisted_report(store, task_id), encoding="utf-8")
+    typer.echo(f"Task: {task_id}\nState: {state.value}\nReport: {report_path}")
 
 
 @app.command()

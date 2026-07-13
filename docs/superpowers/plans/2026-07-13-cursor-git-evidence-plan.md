@@ -484,7 +484,7 @@ Run:
 
 ```powershell
 $python = 'C:\Users\yangs\AppData\Local\Programs\Python\Python312\python.exe'
-$runOutput = @(& $python -m triagent.cli run --profile profiles\windows.example.toml --data-root D:\workspace\runs\live-smoke --live-confirmed --billing-confirmed D:\workspace\work\triagent-live-smoke "Add health_status() returning the string 'ok' in app.py and add a focused pytest test for it. Modify only app.py and tests/test_app.py.")
+$runOutput = @(& $python -m triagent.cli run --profile profiles\windows.example.toml --data-root D:\workspace\runs\live-smoke --live-confirmed --billing-confirmed --risk low --acceptance "health_status() returns ok" --acceptance "focused pytest passes" --forbidden secrets\ --visual-check none D:\workspace\work\triagent-live-smoke "Add health_status() returning the string 'ok' in app.py and add a focused pytest test for it. Modify only app.py and tests/test_app.py.")
 $runOutput
 $taskLine = $runOutput | Where-Object { $_ -like 'Task:*' } | Select-Object -Last 1
 $taskId = (($taskLine -split ':', 2)[1]).Trim()

@@ -38,7 +38,7 @@ def visual_store(tmp_path: Path, artifact: str | None) -> tuple[TaskStore, str, 
     repo = tmp_path / "repo"
     base = init_repo(repo)
     store = TaskStore(tmp_path / "data")
-    task = store.create_task(TaskSpec(goal="x", scope=["x"], acceptance=["x"], risk=RiskLevel.ROBOT_SAFETY))
+    task = store.create_task(TaskSpec(goal="x", scope=[str(repo)], acceptance=["x"], risk=RiskLevel.ROBOT_SAFETY))
     work = store.runs_root / task.id / "worktree"
     work.rmdir()
     subprocess.run(["git", "clone", "-q", str(repo), str(work)], check=True)
@@ -90,7 +90,7 @@ def test_state_root_and_task_creation_failures_are_categorical(tmp_path, monkeyp
     secret = str(tmp_path / "private" / "triagent.sqlite3")
     monkeypatch.setattr(cli_module, "TaskStore", lambda root: (_ for _ in ()).throw(OSError(secret)))
     monkeypatch.setattr(cli_module.GitWorkspace, "validate", lambda repo: (Path(repo), "base"))
-    args = [command, str(tmp_path), "x", "--data-root", str(tmp_path / "data")]
+    args = [command, str(tmp_path), "x", "--risk", "low", "--acceptance", "tests pass", "--visual-check", "none", "--data-root", str(tmp_path / "data")]
     result = CliRunner().invoke(cli_module.app, args)
     assert result.exit_code != 0
     assert secret not in result.output

@@ -43,6 +43,14 @@ def test_task_workspace_does_not_modify_main_worktree(temp_repo: Path) -> None:
     assert git(temp_repo, "branch", "--show-current") == "main"
 
 
+def test_validate_rejects_repository_subdirectory(temp_repo: Path) -> None:
+    subdirectory = temp_repo / "nested"
+    subdirectory.mkdir()
+
+    with pytest.raises(RuntimeError, match="repository root"):
+        GitWorkspace.validate(subdirectory)
+
+
 @pytest.mark.parametrize(
     "task_id", ["../escape", "task/name", "task name", ";rm", "", ".", ".."]
 )

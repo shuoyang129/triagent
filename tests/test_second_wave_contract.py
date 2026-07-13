@@ -100,7 +100,7 @@ def test_cli_partial_git_failure_is_durable_and_records_preserved_resource(tmp_p
         raise RuntimeError("partial git failure with secret detail")
     monkeypatch.setattr(cli_module.GitWorkspace,"create",partial)
     monkeypatch.setattr(cli_module.GitWorkspace,"validate",lambda repo:(Path(repo),"base"))
-    result=CliRunner().invoke(cli_module.app,["run","--profile","fake","--data-root",str(data),str(repo),"x"])
+    result=CliRunner().invoke(cli_module.app,["run","--risk","low","--acceptance","tests pass","--visual-check","none","--profile","fake","--data-root",str(data),str(repo),"x"])
     assert result.exit_code != 0
     task_id=next((data/"runs").iterdir()).name; store=TaskStore(data)
     assert store.load(task_id).state is TaskState.FAILED_FINAL
@@ -144,7 +144,7 @@ max_usd=5
     monkeypatch.setattr(cli_module,"DeepSeekAdapter",lambda *a,**k: DeepSeekStub())
     monkeypatch.setattr(cli_module,"CodexAdapter",lambda *a,**k: CodexStub())
     monkeypatch.setattr(cli_module,"AntigravityAdapter",lambda *a,**k: AntigravityStub())
-    result=CliRunner().invoke(cli_module.app,["run","--profile",str(profile),"--live-confirmed","--billing-confirmed","--data-root",str(tmp_path/"data"),str(repo),"x"])
+    result=CliRunner().invoke(cli_module.app,["run","--risk","low","--acceptance","tests pass","--visual-check","none","--profile",str(profile),"--live-confirmed","--billing-confirmed","--data-root",str(tmp_path/"data"),str(repo),"x"])
     assert result.exit_code != 0 and "task setup failed" in result.output
     assert order[:2] == ["cursor","deepseek"]
 
@@ -153,7 +153,7 @@ def test_pruning_uses_durable_task_approval(tmp_path):
     repo=tmp_path/"repo"; repo.mkdir(); subprocess.run(["git","init","-q"],cwd=repo,check=True)
     subprocess.run(["git","config","user.email","x@y"],cwd=repo,check=True); subprocess.run(["git","config","user.name","x"],cwd=repo,check=True)
     (repo/"a").write_text("a",encoding="utf-8"); subprocess.run(["git","add","a"],cwd=repo,check=True); subprocess.run(["git","commit","-qm","a"],cwd=repo,check=True)
-    store=TaskStore(tmp_path/"data"); task=store.create_task(spec()); destination=store.runs_root/task.id/"worktree"; destination.rmdir()
+    store=TaskStore(tmp_path/"data"); task=store.create_task(spec().model_copy(update={"scope":[str(repo)]})); destination=store.runs_root/task.id/"worktree"; destination.rmdir()
     ws=GitWorkspace.create(repo,task.id,destination=destination); store.set_workspace(task.id,str(repo),ws.base_commit,f"triagent/{task.id}")
     store.materialize_reviewed_commit(task.id); bound=store.approval_manifest(task.id)
     ws.cleanup()

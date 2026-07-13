@@ -10,7 +10,7 @@ Use only the `triagent` operator CLI. Never construct or invoke vendor-agent com
 ## Workflow
 
 1. Diagnose the selected profile before running work.
-2. Create a task for inspection. Prefer the quota-free `fake` profile. A configured real profile requires both `--live-confirmed` and `--billing-confirmed`; never infer either confirmation.
+2. Create a task for inspection with an explicit `--risk`, one or more `--acceptance` criteria, and a declared `--visual-check`. Add repeatable `--forbidden` path exclusions when needed. Prefer the quota-free `fake` profile. A configured real profile requires both `--live-confirmed` and `--billing-confirmed`; never infer either confirmation.
 3. Inspect status and the rendered report.
 4. In outcome approval mode, present the user outcome, tests, independent review, visual artifacts, residual risk, rollback, and pending approval.
 5. Run approval only after the operator explicitly chooses the named approval action.
@@ -19,9 +19,11 @@ Non-fake real profiles cover only the local Phase A coding flow: Cursor implemen
 
 ```shell
 triagent doctor --profile profiles/windows.example.toml
-triagent create PATH "GOAL"
-triagent run --profile fake PATH "GOAL"
-triagent run --profile profiles/windows.example.toml --live-confirmed --billing-confirmed PATH "GOAL"
+triagent create --risk low --acceptance "tests pass" --visual-check none PATH "GOAL"
+triagent run --profile fake --risk low --acceptance "tests pass" --visual-check none PATH "GOAL"
+triagent run --profile profiles/windows.example.toml --live-confirmed --billing-confirmed --risk low --acceptance "tests pass" --forbidden secrets/ --visual-check none PATH "GOAL"
+triagent resume --profile fake TASK_ID
+triagent resume --profile profiles/windows.example.toml --live-confirmed --billing-confirmed TASK_ID
 triagent status TASK_ID
 triagent report TASK_ID
 triagent approve TASK_ID visual

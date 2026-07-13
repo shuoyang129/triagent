@@ -26,7 +26,7 @@ def init_repo(path:Path):
 
 def test_actual_real_adapter_parsers_orchestrate_to_approval(tmp_path):
     repo=tmp_path/"repo"; init_repo(repo); store=TaskStore(tmp_path/"data")
-    task=store.create_task(TaskSpec(goal="x",scope=["x"],acceptance=["x"],budget=Budget(max_usd=3)))
+    task=store.create_task(TaskSpec(goal="x",scope=[str(repo)],acceptance=["x"],budget=Budget(max_usd=3)))
     dest=store.runs_root/task.id/"worktree"; dest.rmdir(); ws=GitWorkspace.create(repo,task.id,destination=dest); store.set_workspace(task.id,str(repo),ws.base_commit,f"triagent/{task.id}")
     nested=json.dumps({"status":"passed","evidence":["implemented"],"artifacts":[],"changed_paths":[]}); cursor_runner=Runner(ProcessResult(0,json.dumps({"type":"result","subtype":"success","is_error":False,"result":nested,"total_cost_usd":.2}),"",False),edit_worktree=True)
     codex_event=json.dumps({"type":"item.completed","item":{"type":"agent_message","text":json.dumps({"status":"passed","evidence":["tests"],"artifacts":[]})}})

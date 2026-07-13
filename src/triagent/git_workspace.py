@@ -53,7 +53,11 @@ class GitWorkspace:
 
     @classmethod
     def validate(cls, repo: Path) -> tuple[Path,str]:
-        repo=Path(repo).resolve(); base=_git(repo,"rev-parse","HEAD")
+        repo=Path(repo).resolve()
+        top_level=Path(_git(repo,"rev-parse","--show-toplevel")).resolve()
+        if repo != top_level:
+            raise RuntimeError("repository input must be the repository root")
+        base=_git(repo,"rev-parse","HEAD")
         dirty=_git(repo,"status","--porcelain=v2","--",".").splitlines()
         # An uninitialized/missing worktree for an already-committed gitlink is
         # not candidate content. Allow setup to proceed so candidate validation
