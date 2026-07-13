@@ -238,7 +238,7 @@ class TaskStore:
             cursor = connection.execute("UPDATE agent_calls SET status=?,actual_usd=?,charged_usd=?,diagnostic=? WHERE id=? AND task_id=? AND status='started'", (status, actual_usd, charged, diagnostic, call_id, task_id))
             if cursor.rowcount != 1: raise StateConflict("call is not pending")
             connection.execute(f"UPDATE task_runtime SET {column}={column}+1, usd_spent=usd_spent+? WHERE task_id=?", (charged, task_id))
-    def complete_agent_call(self, task_id: str, call_id: str, actual_usd: float | None = None): self._finish_call(task_id, call_id, "completed", actual_usd)
+    def complete_agent_call(self, task_id: str, call_id: str, actual_usd: float | None = None, diagnostic: str = ""): self._finish_call(task_id, call_id, "completed", actual_usd, diagnostic[:200])
     def interrupt_agent_call(self, task_id: str, call_id: str, diagnostic: str, actual_usd: float | None = None):
         with self._connect() as connection: row=connection.execute("SELECT estimated_usd FROM agent_calls WHERE id=? AND task_id=?",(call_id,task_id)).fetchone()
         if row is None: raise StateConflict("call is not pending")

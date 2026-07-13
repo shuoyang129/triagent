@@ -295,11 +295,16 @@ def invoke_json(
     actual=payload.get("actual_usd") if isinstance(payload.get("actual_usd"),(int,float)) and not isinstance(payload.get("actual_usd"),bool) and math.isfinite(payload.get("actual_usd")) else None
     if cursor_envelope:
         try:
-            envelope=CursorEnvelope.model_validate(payload); payload=json.loads(envelope.result)
-        except (ValidationError,json.JSONDecodeError): return AgentResult(status=AgentStatus.INVALID_OUTPUT,summary="Cursor returned invalid result envelope")
+            envelope=CursorEnvelope.model_validate(payload)
+        except ValidationError:
+            return AgentResult(status=AgentStatus.INVALID_OUTPUT,summary="Cursor returned invalid result envelope",data={"diagnostic_code":"cursor-envelope-invalid"})
+        try:
+            payload=json.loads(envelope.result)
+        except json.JSONDecodeError:
+            return AgentResult(status=AgentStatus.INVALID_OUTPUT,summary="Cursor returned non-JSON canonical result",data={"diagnostic_code":"cursor-result-non-json"})
         actual=envelope.total_cost_usd
     try: data=_canonical(role,payload)
-    except ValueError: return AgentResult(status=AgentStatus.INVALID_OUTPUT,summary="CLI returned invalid canonical output")
+    except ValueError: return AgentResult(status=AgentStatus.INVALID_OUTPUT,summary="CLI returned invalid canonical output",data={"diagnostic_code":"canonical-output-invalid"})
     return AgentResult(
         status=AgentStatus.SUCCEEDED,
         data=data,

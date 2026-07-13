@@ -186,6 +186,17 @@ def test_cursor_headless_run_trusts_controller_created_worktree(agent_request: A
     assert "--trust" in runner.calls[0][0]
 
 
+def test_cursor_classifies_non_json_nested_result_without_persisting_vendor_text(agent_request: AgentRequest) -> None:
+    vendor_text = "completed but not canonical"
+    runner = FakeRunner(completed(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": vendor_text})))
+
+    result = CursorAdapter(runner=runner).run(agent_request)
+
+    assert result.status is AgentStatus.INVALID_OUTPUT
+    assert result.data == {"diagnostic_code": "cursor-result-non-json"}
+    assert vendor_text not in result.model_dump_json()
+
+
 def test_cursor_does_not_probe_models_or_smoke_without_billing_confirmation(tmp_path: Path) -> None:
     runner = FakeRunner(
         completed("cursor-agent 1"),

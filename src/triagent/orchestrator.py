@@ -14,6 +14,14 @@ from triagent.adapters.deepseek import DeepSeekAdapter
 from triagent.adapters.fake import FakeAgent
 
 _TRUSTED={CursorAdapter:("cursor",frozenset({AgentRole.IMPLEMENTER})),CodexAdapter:("codex",frozenset({AgentRole.VERIFIER})),AntigravityAdapter:("antigravity",frozenset({AgentRole.REVIEWER})),DeepSeekAdapter:("deepseek",frozenset({AgentRole.IMPLEMENTER}))}
+_SAFE_DIAGNOSTICS=frozenset({
+    "canonical-output-invalid",
+    "cursor-envelope-invalid",
+    "cursor-result-non-json",
+    "transport-acl-setup-failed",
+    "transport-acl-verification-failed",
+    "transport-cleanup-failed",
+})
 def _contract(adapter):
     if type(adapter) is FakeAgent: return "fake",frozenset({AgentRole.IMPLEMENTER,AgentRole.VERIFIER,AgentRole.REVIEWER})
     try: return _TRUSTED[type(adapter)]
@@ -76,14 +84,14 @@ class Orchestrator:
             self.store.interrupt_agent_call(task_id, call_id, type(error).__name__); raise
         if self._lease_owner: self.store.renew_lease(task_id, self._lease_owner, 600)
         actual = 0.0 if estimate.zero_cost_enforced else result.actual_usd
-        try: self.store.complete_agent_call(task_id, call_id, actual)
+        raw_diagnostic=result.data.get("diagnostic_code")
+        diagnostic=raw_diagnostic if isinstance(raw_diagnostic,str) and raw_diagnostic in _SAFE_DIAGNOSTICS else (result.status.value if result.status is not AgentStatus.SUCCEEDED else "")
+        try: self.store.complete_agent_call(task_id, call_id, actual, diagnostic)
         except BudgetExceeded:
             self.store.finalize_overrun_and_pause(task_id,call_id,actual,state); return None
         if result.status is not AgentStatus.SUCCEEDED:
-            diagnostic=result.data.get("diagnostic_code")
             if diagnostic == "transport-cleanup-failed":self.store.record_attention(task_id,diagnostic)
-            event=diagnostic if isinstance(diagnostic,str) else result.status.value
-            self.store.transition(task_id, state, TaskState.FAILED_RECOVERABLE, event)
+            self.store.transition(task_id, state, TaskState.FAILED_RECOVERABLE, diagnostic)
             return None
         if result.data.get("status") == "failed":
             stage={AgentRole.IMPLEMENTER:"implement",AgentRole.VERIFIER:"verify",AgentRole.REVIEWER:"review"}[request.role]

@@ -82,3 +82,26 @@ def test_runtime_counters_survive_store_reopen(tmp_path: Path) -> None:
     orchestrator.run_until_blocked(task.id)
     reopened = TaskStore(tmp_path)
     assert reopened.runtime(task.id).agent_calls == 1
+
+
+def test_failed_agent_call_persists_only_allowlisted_diagnostic_code(tmp_path: Path) -> None:
+    failed = AgentResult(
+        status=AgentStatus.INVALID_OUTPUT,
+        summary="vendor text must not be persisted",
+        data={"diagnostic_code": "cursor-result-non-json"},
+    )
+    orchestrator, store = make_orchestrator(
+        tmp_path,
+        FakeAgent.succeeding("clean"),
+        implementer=FakeAgent([failed]),
+    )
+    task = store.create_task(make_spec())
+
+    orchestrator.run_until_blocked(task.id)
+
+    with store._connect() as connection:
+        row = connection.execute(
+            "SELECT diagnostic FROM agent_calls WHERE task_id = ?",
+            (task.id,),
+        ).fetchone()
+    assert row["diagnostic"] == "cursor-result-non-json"
