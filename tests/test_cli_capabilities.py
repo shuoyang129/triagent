@@ -177,6 +177,15 @@ def test_cursor_uses_wsl_argv_and_does_not_interpolate_prompt(agent_request: Age
     assert result.status is AgentStatus.SUCCEEDED
 
 
+def test_cursor_headless_run_trusts_controller_created_worktree(agent_request: AgentRequest) -> None:
+    nested = json.dumps({"status": "passed", "evidence": [], "artifacts": [], "changed_paths": []})
+    runner = FakeRunner(completed(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": nested})))
+
+    CursorAdapter(runner=runner).run(agent_request)
+
+    assert "--trust" in runner.calls[0][0]
+
+
 def test_cursor_does_not_probe_models_or_smoke_without_billing_confirmation(tmp_path: Path) -> None:
     runner = FakeRunner(
         completed("cursor-agent 1"),

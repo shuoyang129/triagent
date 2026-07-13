@@ -70,4 +70,4 @@ class CursorAdapter(AgentAdapter):
     def run(self, request: AgentRequest) -> AgentResult:
         payload,error=read_prompt(request)
         if error:return error
-        return invoke_json(self._runner,self._command("--print","--output-format","json"),request.workdir,request.timeout_seconds,self._env,self._secrets,request.role,stdin=payload,cursor_envelope=True)
+        return invoke_json(self._runner,self._command("--trust","--print","--output-format","json"),request.workdir,request.timeout_seconds,self._env,self._secrets,request.role,stdin=payload,cursor_envelope=True)
