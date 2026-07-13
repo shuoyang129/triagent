@@ -184,6 +184,7 @@ class Orchestrator:
                 if task.spec.visual_check == "required"
                 else TaskState.APPROVAL
             )
+            self.store.materialize_reviewed_commit(task_id)
             manifest=self.store.approval_manifest(task_id)
             if target is TaskState.WAITING_FOR_VISUAL_APPROVAL: self.store.request_approval(task_id,"visual",manifest)
             else:

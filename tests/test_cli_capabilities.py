@@ -167,7 +167,7 @@ def test_codex_jsonl_rejects_malformed_or_no_message_stream(agent_request: Agent
 
 
 def test_cursor_uses_wsl_argv_and_does_not_interpolate_prompt(agent_request: AgentRequest) -> None:
-    nested=json.dumps({"status":"passed"}); runner = FakeRunner(completed(json.dumps({"type":"result","subtype":"success","is_error":False,"result":nested})))
+    nested=json.dumps({"status":"passed","evidence":[],"artifacts":[]}); runner = FakeRunner(completed(json.dumps({"type":"result","subtype":"success","is_error":False,"result":nested})))
     result = CursorAdapter(runner=runner).run(agent_request)
     argv = runner.calls[0][0]
     assert argv[:5] == ["wsl.exe", "--distribution", "Ubuntu-24.04", "--exec", "bash"]
@@ -225,7 +225,7 @@ def test_sentinel_unlink_failure_forces_smoke_false(tmp_path: Path, monkeypatch:
 
 
 def test_antigravity_print_mode_never_skips_permissions(agent_request: AgentRequest) -> None:
-    runner = FakeRunner(completed('{"status":"passed"}'))
+    runner = FakeRunner(completed('{"status":"passed","evidence":[],"artifacts":[]}'))
     result = AntigravityAdapter(runner=runner,acl_verifier=lambda directory,file: True).run(agent_request)
     argv = runner.calls[0][0]
     assert argv[:2] == ["agy.exe", "-p"]

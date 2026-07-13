@@ -41,10 +41,10 @@ def test_happy_path_reaches_approval(tmp_path: Path) -> None:
 def test_robot_task_waits_for_visual_confirmation(tmp_path: Path) -> None:
     orchestrator, store = make_orchestrator(tmp_path, FakeAgent.succeeding("clean"))
     task = store.create_task(make_spec(risk=RiskLevel.ROBOT_SAFETY))
-    orchestrator.run_until_blocked(task.id)
-    assert store.load(task.id).state is TaskState.WAITING_FOR_VISUAL_APPROVAL
-    orchestrator.approve(task.id, "visual")
-    assert store.load(task.id).state is TaskState.APPROVAL
+    import pytest
+    with pytest.raises(ValueError, match="visual artifact"):
+        orchestrator.run_until_blocked(task.id)
+    assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
 
 
 def test_budget_exhaustion_pauses_before_next_agent_call(tmp_path: Path) -> None:

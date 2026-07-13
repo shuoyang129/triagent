@@ -53,7 +53,10 @@ def _status(value: bool | None) -> str:
 
 @app.command()
 def create(repo: Path, goal: str, data_root: DataRoot = None) -> None:
-    task = TaskStore(_root(data_root)).create_task(_spec(repo, goal))
+    try:
+        task = TaskStore(_root(data_root)).create_task(_spec(repo, goal))
+    except Exception:
+        raise typer.BadParameter("task creation failed") from None
     typer.echo(f"Task: {task.id}\nState: {task.state.value}")
 
 
@@ -73,7 +76,10 @@ def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake",
         GitWorkspace.validate(repo)
     except (OSError,tomllib.TOMLDecodeError,ValueError,TypeError,RuntimeError):
         raise typer.BadParameter("task input validation failed") from None
-    store = TaskStore(_root(data_root)); task = store.create_task(_spec(repo, goal, budget))
+    try:
+        store = TaskStore(_root(data_root)); task = store.create_task(_spec(repo, goal, budget))
+    except Exception:
+        raise typer.BadParameter("task creation failed") from None
     run_worktree = store.runs_root / task.id / "worktree"
     try:
         if profile != "fake": store.record_attestation(task.id,"live-confirmed",True); store.record_attestation(task.id,"billing-confirmed",True)

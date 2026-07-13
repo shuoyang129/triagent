@@ -55,9 +55,9 @@ def request(tmp_path: Path, role: AgentRole) -> AgentRequest:
 @pytest.mark.parametrize(
     ("role", "adapter", "output"),
     [
-        (AgentRole.IMPLEMENTER, CursorAdapter, ProcessResult(0, json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": json.dumps({"status": "passed"})}), "", False)),
-        (AgentRole.VERIFIER, CodexAdapter, ProcessResult(0, json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps({"status": "passed"})}}), "", False)),
-        (AgentRole.REVIEWER, AntigravityAdapter, ProcessResult(0, json.dumps({"status": "passed", "findings": []}), "", False)),
+        (AgentRole.IMPLEMENTER, CursorAdapter, ProcessResult(0, json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": json.dumps({"status": "passed", "evidence": [], "artifacts": []})}), "", False)),
+        (AgentRole.VERIFIER, CodexAdapter, ProcessResult(0, json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps({"status": "passed", "evidence": [], "artifacts": []})}}), "", False)),
+        (AgentRole.REVIEWER, AntigravityAdapter, ProcessResult(0, json.dumps({"status": "passed", "evidence": [], "artifacts": [], "findings": []}), "", False)),
     ],
 )
 def test_controller_prompt_reaches_vendor_bytes_with_exact_role_schema(tmp_path, role, adapter, output):
@@ -66,7 +66,7 @@ def test_controller_prompt_reaches_vendor_bytes_with_exact_role_schema(tmp_path,
     assert adapter(runner=runner, **kwargs).run(request(tmp_path, role)).status is AgentStatus.SUCCEEDED
     prompt = (runner.file_bytes[0].decode() if runner.file_bytes else runner.inputs[0])
     assert f'IMMUTABLE_ROLE={role.value}' in prompt
-    assert f'REQUIRED_OPERATION={role.value}' in prompt
+    assert 'REQUIRED_OPERATION=' in prompt and f'REQUIRED_OPERATION={role.value}\n' not in prompt
     assert "SAFETY_BOUNDARY=" in prompt
     assert f'OUTPUT_SCHEMA_ID={role.value}-result-v1' in prompt
     schema = json.loads(prompt.split("OUTPUT_SCHEMA_JSON=", 1)[1].split("\nTASK\n", 1)[0])
@@ -77,7 +77,7 @@ def test_controller_prompt_reaches_vendor_bytes_with_exact_role_schema(tmp_path,
 
 def test_antigravity_secures_directory_before_payload_write(tmp_path):
     order = []
-    runner = CaptureRunner(ProcessResult(0, json.dumps({"status": "passed", "findings": []}), "", False))
+    runner = CaptureRunner(ProcessResult(0, json.dumps({"status": "passed", "evidence": [], "artifacts": [], "findings": []}), "", False))
 
     def verify(directory: Path, file: Path | None) -> bool:
         order.append("directory" if file is None else "file")
@@ -119,7 +119,7 @@ def _init_repo(path: Path) -> str:
     return subprocess.run(["git", "rev-parse", "HEAD"], cwd=path, check=True, capture_output=True, text=True).stdout.strip()
 
 
-def test_approval_consumption_rejects_changed_diff_manifest(tmp_path):
+def test_approval_consumption_stays_bound_to_materialized_commit(tmp_path):
     repo = tmp_path / "repo"
     base = _init_repo(repo)
     store = TaskStore(tmp_path / "data")
@@ -128,11 +128,12 @@ def test_approval_consumption_rejects_changed_diff_manifest(tmp_path):
     work.rmdir()
     shutil.copytree(repo, work)
     store.set_workspace(task.id, str(repo), base, f"triagent/{task.id}")
+    store.materialize_reviewed_commit(task.id)
     store.transition(task.id, TaskState.SPEC, TaskState.WAITING_FOR_VISUAL_APPROVAL, "review-passed")
     store.request_approval(task.id, "visual", store.approval_manifest(task.id))
     (work / "a.txt").write_text("changed after review", encoding="utf-8")
-    with pytest.raises(ValueError, match="manifest changed"):
-        store.approve_and_transition(task.id, "visual", TaskState.WAITING_FOR_VISUAL_APPROVAL, TaskState.APPROVAL)
+    store.approve_and_transition(task.id, "visual", TaskState.WAITING_FOR_VISUAL_APPROVAL, TaskState.APPROVAL)
+    assert store.load(task.id).state is TaskState.APPROVAL
 
 
 def test_cleanup_failure_persists_sanitized_attention(tmp_path, monkeypatch):

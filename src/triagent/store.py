@@ -10,6 +10,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from pathlib import PurePosixPath
 
 from triagent.domain import StageOutcome, TaskSpec, TaskState
 from triagent.run_layout import RunLayout
@@ -93,6 +94,9 @@ class TaskStore:
                 if "duplicate column name" not in str(error).lower(): raise
             connection.execute("CREATE TABLE IF NOT EXISTS stage_outcomes(task_id TEXT NOT NULL, stage TEXT NOT NULL, outcome_json TEXT NOT NULL, PRIMARY KEY(task_id, stage))")
             connection.execute("CREATE TABLE IF NOT EXISTS workspace_meta(task_id TEXT PRIMARY KEY, repo TEXT NOT NULL, base_commit TEXT NOT NULL, branch TEXT NOT NULL)")
+            try: connection.execute("ALTER TABLE workspace_meta ADD COLUMN reviewed_commit TEXT")
+            except sqlite3.OperationalError as error:
+                if "duplicate column name" not in str(error).lower():raise
             connection.execute("CREATE TABLE IF NOT EXISTS approval_records(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action))")
             connection.execute("CREATE TABLE IF NOT EXISTS approval_requests(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action))")
             connection.execute("CREATE TABLE IF NOT EXISTS approval_records_versions(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action,resource_json))")
@@ -203,40 +207,66 @@ class TaskStore:
         layout=RunLayout(self.runs_root/task_id); layout.write_state(TaskState.PAUSED_BUDGET); layout.append_event({"at":now,"event":"cost-overrun","state":TaskState.PAUSED_BUDGET.value})
 
     def set_workspace(self, task_id: str, repo: str, base_commit: str, branch: str) -> None:
-        with self._connect() as connection: connection.execute("INSERT OR REPLACE INTO workspace_meta VALUES(?,?,?,?)",(task_id,repo,base_commit,branch))
+        with self._connect() as connection: connection.execute("INSERT OR REPLACE INTO workspace_meta(task_id,repo,base_commit,branch,reviewed_commit) VALUES(?,?,?,?,NULL)",(task_id,repo,base_commit,branch))
     def workspace(self, task_id: str):
         with self._connect() as connection: return connection.execute("SELECT * FROM workspace_meta WHERE task_id=?",(task_id,)).fetchone()
+
+    def materialize_reviewed_commit(self,task_id:str)->str:
+        meta=self.workspace(task_id)
+        if meta is None:
+            if self.load(task_id).spec.visual_check == "required":raise ValueError("required visual artifact unavailable")
+            return "fake"
+        if meta["reviewed_commit"]:
+            reviewed=meta["reviewed_commit"]
+            check=subprocess.run(["git","cat-file","-e",f"{reviewed}^{{commit}}"],cwd=self.runs_root/task_id/"worktree",capture_output=True)
+            if check.returncode!=0:raise ValueError("reviewed commit unavailable")
+            return reviewed
+        work=self.runs_root/task_id/"worktree"
+        try:
+            subprocess.run(["git","add","-A"],cwd=work,check=True,capture_output=True)
+            staged=subprocess.run(["git","diff","--cached","--quiet"],cwd=work,capture_output=True).returncode
+            if staged not in {0,1}:raise ValueError("cannot inspect reviewed snapshot")
+            if staged==1:
+                subprocess.run(["git","-c","user.name=TriAgent Controller","-c","user.email=triagent@localhost","commit","--no-gpg-sign","-m",f"triagent reviewed snapshot {task_id}"],cwd=work,check=True,capture_output=True)
+            reviewed=subprocess.run(["git","rev-parse","HEAD"],cwd=work,check=True,capture_output=True,text=True).stdout.strip()
+            subprocess.run(["git","cat-file","-e",f"{reviewed}^{{commit}}"],cwd=work,check=True,capture_output=True)
+        except (OSError,subprocess.CalledProcessError,UnicodeError,ValueError) as error:
+            raise ValueError("reviewed commit unavailable") from error
+        with self._connect() as connection:connection.execute("UPDATE workspace_meta SET reviewed_commit=? WHERE task_id=? AND reviewed_commit IS NULL",(reviewed,task_id))
+        persisted=self.workspace(task_id)["reviewed_commit"]
+        if persisted!=reviewed:raise ValueError("reviewed commit conflict")
+        return reviewed
 
     def approval_manifest(self, task_id: str) -> dict[str,str]:
         meta=self.workspace(task_id)
         empty=hashlib.sha256(b"").hexdigest()
         if meta is None:
-            return {"repo":"fake","task_id":task_id,"branch":"fake","base_commit":"fake","reviewed_head":"fake","canonical_diff_digest":empty,"visual_artifact_digest":empty,"visual_artifact_version":empty}
+            if self.load(task_id).spec.visual_check == "required":raise ValueError("required visual artifact unavailable")
+            return {"repo":"fake","task_id":task_id,"branch":"fake","base_commit":"fake","reviewed_commit":"fake","reviewed_head":"fake","canonical_diff_digest":empty,"visual_artifact_digest":empty,"visual_artifact_version":empty}
         work=self.runs_root/task_id/"worktree"
+        reviewed=meta["reviewed_commit"]
+        if not reviewed:raise ValueError("reviewed commit unavailable")
         try:
-            head=subprocess.run(["git","rev-parse","HEAD"],cwd=work,check=True,capture_output=True,text=True).stdout.strip()
-            diff=subprocess.run(["git","diff","--binary",meta["base_commit"]],cwd=work,check=True,capture_output=True).stdout
-            untracked=subprocess.run(["git","ls-files","--others","--exclude-standard"],cwd=work,check=True,capture_output=True,text=True).stdout.splitlines()
-            extra=[]
-            root=work.resolve()
-            for name in sorted(untracked):
-                path=(work/name).resolve()
-                if root not in path.parents:raise ValueError("unsafe untracked path")
-                data=path.read_bytes()
-                extra.append({"path":name,"sha256":hashlib.sha256(data).hexdigest(),"size":len(data)})
+            subprocess.run(["git","cat-file","-e",f"{reviewed}^{{commit}}"],cwd=work,check=True,capture_output=True)
+            diff=subprocess.run(["git","diff","--binary",meta["base_commit"],reviewed],cwd=work,check=True,capture_output=True).stdout
         except (OSError,subprocess.CalledProcessError,UnicodeError,ValueError) as error:
             raise ValueError("approval manifest unavailable") from error
-        diff_digest=hashlib.sha256(diff+json.dumps(extra,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+        diff_digest=hashlib.sha256(diff).hexdigest()
         artifacts=[]
-        root=work.resolve()
+        allow={".png",".jpg",".jpeg",".webp",".gif",".svg",".pdf"}
         for outcome in self.outcomes(task_id).values():
             for name in outcome.artifacts:
-                candidate=(work/name).resolve()
-                if root in candidate.parents and candidate.is_file():
-                    data=candidate.read_bytes(); artifacts.append({"name":name,"sha256":hashlib.sha256(data).hexdigest(),"size":len(data)})
-                else: artifacts.append({"name":name,"sha256":hashlib.sha256(name.encode()).hexdigest(),"size":0})
+                path=PurePosixPath(name)
+                if path.is_absolute() or "\\" in name or any(part in {"",".",".."} for part in path.parts) or path.suffix.lower() not in allow:continue
+                try:
+                    entry=subprocess.run(["git","ls-tree",reviewed,"--",name],cwd=work,check=True,capture_output=True,text=True).stdout.strip()
+                    if not entry or not entry.startswith(("100644 blob ","100755 blob ")):continue
+                    data=subprocess.run(["git","show",f"{reviewed}:{name}"],cwd=work,check=True,capture_output=True).stdout
+                except (OSError,subprocess.CalledProcessError):continue
+                artifacts.append({"name":name,"sha256":hashlib.sha256(data).hexdigest(),"size":len(data)})
+        if self.load(task_id).spec.visual_check == "required" and not artifacts:raise ValueError("required visual artifact unavailable")
         artifact_digest=hashlib.sha256(json.dumps(sorted(artifacts,key=lambda x:x["name"]),sort_keys=True,separators=(",",":")).encode()).hexdigest()
-        return {"repo":meta["repo"],"task_id":task_id,"branch":meta["branch"],"base_commit":meta["base_commit"],"reviewed_head":head,"canonical_diff_digest":diff_digest,"visual_artifact_digest":artifact_digest,"visual_artifact_version":artifact_digest}
+        return {"repo":meta["repo"],"task_id":task_id,"branch":meta["branch"],"base_commit":meta["base_commit"],"reviewed_commit":reviewed,"reviewed_head":reviewed,"canonical_diff_digest":diff_digest,"visual_artifact_digest":artifact_digest,"visual_artifact_version":artifact_digest}
 
     def _verify_approval_manifest(self, task_id:str,action:str,resource_json:str)->None:
         if action not in {"visual","outcome","merge"} or self.workspace(task_id) is None:return

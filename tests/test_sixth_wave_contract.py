@@ -21,18 +21,18 @@ def req(tmp_path,role,size=200000):
     return AgentRequest(role=role,task_file=task,handoff_file=hand,workdir=tmp_path,output_schema="x",timeout_seconds=5)
 
 def test_cursor_captured_help_contract_and_nested_wrapper_stdin(tmp_path):
-    nested=json.dumps({"status":"passed","evidence":["ok"]});runner=Runner(ProcessResult(0,json.dumps({"type":"result","subtype":"success","is_error":False,"result":nested,"total_cost_usd":.2}),"",False))
+    nested=json.dumps({"status":"passed","evidence":["ok"],"artifacts":[]});runner=Runner(ProcessResult(0,json.dumps({"type":"result","subtype":"success","is_error":False,"result":nested,"total_cost_usd":.2}),"",False))
     result=CursorAdapter(runner=runner).run(req(tmp_path,AgentRole.IMPLEMENTER))
     argv=runner.calls[0];assert result.status is AgentStatus.SUCCEEDED and argv[-3:]==["--print","--output-format","json"]
     assert runner.stdin[0].startswith("TRIAGENT_CONTROLLER_PROMPT_V2") and "--input-file" not in argv and not list(tmp_path.glob(".triagent-input-*"))
 
 def test_codex_documented_dash_stdin_large_payload(tmp_path):
-    event=json.dumps({"type":"item.completed","item":{"type":"agent_message","text":json.dumps({"status":"passed"})}});runner=Runner(ProcessResult(0,event,"",False))
+    event=json.dumps({"type":"item.completed","item":{"type":"agent_message","text":json.dumps({"status":"passed","evidence":[],"artifacts":[]})}});runner=Runner(ProcessResult(0,event,"",False))
     assert CodexAdapter(runner=runner).run(req(tmp_path,AgentRole.VERIFIER)).status is AgentStatus.SUCCEEDED
     assert runner.calls[0][-1]=="-" and len(runner.stdin[0])>200000 and "--input-file" not in runner.calls[0]
 
 def test_antigravity_external_acl_path_only_and_cleanup(tmp_path):
-    checked=[];runner=Runner(ProcessResult(0,json.dumps({"status":"passed","findings":[]}),"",False))
+    checked=[];runner=Runner(ProcessResult(0,json.dumps({"status":"passed","evidence":[],"artifacts":[],"findings":[]}),"",False))
     adapter=AntigravityAdapter(runner=runner,acl_verifier=lambda directory,file:checked.append((directory,file)) or True)
     assert adapter.run(req(tmp_path,AgentRole.REVIEWER)).status is AgentStatus.SUCCEEDED
     directory,file=checked[1];assert checked[0]==(directory,None) and tmp_path not in file.parents and runner.stdin[0] is None and not directory.exists()

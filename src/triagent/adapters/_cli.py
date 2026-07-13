@@ -54,9 +54,9 @@ def read_prompt(request) -> tuple[str | None, AgentResult | None]:
             handoff_bytes=request.handoff_file.read_bytes(); json.loads(handoff_bytes.decode("utf-8"))
         role=request.role
         operation={
-            AgentRole.IMPLEMENTER:"implementer",
-            AgentRole.VERIFIER:"verifier",
-            AgentRole.REVIEWER:"reviewer",
+            AgentRole.IMPLEMENTER:"implement the supplied task and produce implementation evidence",
+            AgentRole.VERIFIER:"verify the supplied implementation and produce verification evidence",
+            AgentRole.REVIEWER:"independently review the supplied implementation and report findings",
         }[role]
         properties={
             "status":{"type":"string","enum":["passed","failed"]},
@@ -91,11 +91,11 @@ class FindingPayload(BaseModel):
 class CanonicalPayload(BaseModel):
     model_config=ConfigDict(extra="forbid",strict=True)
     status: Literal["passed","failed"]
-    evidence:list[StrictStr]=Field(default_factory=list,max_length=50)
-    artifacts:list[StrictStr]=Field(default_factory=list,max_length=50)
+    evidence:list[StrictStr]=Field(max_length=50)
+    artifacts:list[StrictStr]=Field(max_length=50)
     actual_usd:float|None=Field(default=None,ge=0,allow_inf_nan=False,strict=True)
 class ReviewPayload(CanonicalPayload):
-    findings:list[FindingPayload]=Field(default_factory=list,max_length=50)
+    findings:list[FindingPayload]=Field(max_length=50)
 class CursorEnvelope(BaseModel):
     model_config=ConfigDict(extra="allow",strict=True)
     type: Literal["result"]
@@ -133,7 +133,7 @@ def _windows_acl(directory:Path,file:Path|None)->bool:
         f"$s.SetSecurityDescriptorSddlForm('{sddl}');"
         f"Set-Acl -LiteralPath '{quoted}' -AclObject $s -ErrorAction Stop;"
         f"$a=Get-Acl -LiteralPath '{quoted}' -ErrorAction Stop;"
-        "$rules=@($a.Access|ForEach-Object{@{sid=$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value;type=$_.AccessControlType.ToString();rights=$_.FileSystemRights.ToString()}});"
+        "$rules=@($a.Access|ForEach-Object{@{sid=$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value;type=$_.AccessControlType.ToString();rights=$_.FileSystemRights.ToString();inheritance=$_.InheritanceFlags.ToString();propagation=$_.PropagationFlags.ToString()}});"
         "@{owner=$a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;protected=$a.AreAccessRulesProtected;rules=$rules}|ConvertTo-Json -Depth 4 -Compress"
     )
     evidence=_powershell_json(apply)
@@ -142,7 +142,10 @@ def _windows_acl(directory:Path,file:Path|None)->bool:
     if isinstance(rules,dict):rules=[rules]
     allowed={sid,"S-1-5-18"}
     if not isinstance(rules,list) or {r.get("sid") for r in rules if isinstance(r,dict)} != allowed:return False
-    return all(isinstance(r,dict) and r.get("type")=="Allow" and "FullControl" in r.get("rights","") for r in rules)
+    if not all(isinstance(r,dict) and r.get("type")=="Allow" and "FullControl" in r.get("rights","") for r in rules):return False
+    if is_directory:
+        return all({part.strip() for part in r.get("inheritance","").split(",")}=={"ContainerInherit","ObjectInherit"} and r.get("propagation")=="None" for r in rules)
+    return all(r.get("inheritance")=="None" and r.get("propagation")=="None" for r in rules)
 @contextmanager
 def external_restricted_input(request,acl_verifier=None):
     payload,error=read_prompt(request)
