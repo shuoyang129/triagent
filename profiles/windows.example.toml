@@ -8,18 +8,26 @@ python = "C:/Users/yangs/AppData/Local/Programs/Python/Python312/python.exe"
 
 [agents.codex]
 command = ["codex"]
+estimated_usd = 1.0
 
 [agents.cursor]
 command = ["wsl.exe", "--distribution", "Ubuntu-24.04", "--exec", "bash", "--noprofile", "-c", "exec \"$HOME/.local/bin/cursor-agent\" \"$@\"", "cursor"]
+estimated_usd = 1.0
 
 [agents.antigravity]
 command = ["C:/Users/yangs/AppData/Local/agy/bin/agy.exe"]
+estimated_usd = 1.0
 
 [agents.opencode]
 enabled = false
 command = ["opencode"]
+estimated_usd = 1.0
+probe_estimated_usd = 0.25
 
 [budget]
+max_agent_calls = 20
+max_minutes = 60
+max_usd = 20.0
 cursor_saver_threshold = 0.70
 cursor_handoff_threshold = 0.90
 allow_paid_overage = false

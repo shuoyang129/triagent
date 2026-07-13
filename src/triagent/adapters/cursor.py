@@ -8,7 +8,7 @@ from pathlib import Path
 from pydantic import ConfigDict
 
 from triagent.adapters._cli import filesystem_probe, invoke_json, probe, read_prompt, runtime
-from triagent.adapters.base import AgentAdapter, AgentCapabilities, AgentRequest, AgentResult
+from triagent.adapters.base import AgentAdapter, AgentCapabilities, AgentRequest, AgentResult, AgentRole, CostEstimate
 from triagent.adapters.process import ProcessRunner
 
 
@@ -21,17 +21,22 @@ class CursorCapabilities(AgentCapabilities):
 
 
 class CursorAdapter(AgentAdapter):
+    identity = "cursor"
+    allowed_roles = frozenset({AgentRole.IMPLEMENTER})
     _prefix = ["wsl.exe", "--distribution", "Ubuntu-24.04", "--exec", "bash", "--noprofile", "-c"]
 
-    def __init__(self, runner: ProcessRunner | None = None, deepseek_billing_confirmed: bool = False, secret_values: Sequence[str] = (), probe_dir: Path | None = None, command: Sequence[str] | None = None) -> None:
+    def __init__(self, runner: ProcessRunner | None = None, deepseek_billing_confirmed: bool = False, secret_values: Sequence[str] = (), probe_dir: Path | None = None, command: Sequence[str] | None = None, estimated_usd: float | None = None) -> None:
         default_runner, self._env, self._secrets = runtime(("CURSOR_API_KEY", "DEEPSEEK_API_KEY"), secret_values)
         bridge = [f"{name}/u" for name in ("CURSOR_API_KEY", "DEEPSEEK_API_KEY") if name in self._env]
         if bridge:
             self._env["WSLENV"] = ":".join(bridge)
         self._runner = runner or default_runner
+        self._estimated_usd=estimated_usd
         self._billing = deepseek_billing_confirmed
         self._probe_dir = probe_dir or Path(tempfile.gettempdir())
         self._configured_command = list(command) if command is not None else None
+
+    def estimate_cost(self, request): return CostEstimate(self._estimated_usd)
 
     def _command(self, *args: str) -> list[str]:
         if self._configured_command is not None:

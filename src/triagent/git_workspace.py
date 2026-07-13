@@ -121,9 +121,9 @@ class GitWorkspace:
     def cleanup(self) -> None:
         _git(self.repo, "worktree", "remove", str(self.path))
 
-    def prune_branch(self, *, approved: bool = False) -> None:
-        if not approved:
-            raise PermissionError("branch pruning requires explicit approval")
+    def prune_branch(self, *, store=None, task_id: str | None = None) -> None:
+        if store is None or task_id is None or "prune-branch" not in store.runtime(task_id).approvals:
+            raise PermissionError("branch pruning requires durable prune-branch approval")
         if self.path.exists():
             raise RuntimeError("clean up the worktree before pruning its preservation branch")
         _git(self.repo, "branch", "-D", f"triagent/{self.task_id}")

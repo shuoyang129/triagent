@@ -25,14 +25,13 @@ def request(tmp_path: Path) -> AgentRequest:
                         workdir=tmp_path, output_schema="implementation-result-v1", timeout_seconds=1)
 
 
-@pytest.mark.parametrize("enabled,billing,live,ready", [
-    (False, False, False, False), (True, False, True, True),
-    (True, True, False, True), (True, True, True, False),
+@pytest.mark.parametrize("enabled,billing,live", [
+    (False, False, False), (True, False, True),
+    (True, True, False), (True, True, True),
 ])
-def test_deepseek_direct_run_fails_closed(tmp_path, enabled, billing, live, ready):
+def test_deepseek_direct_run_fails_closed(tmp_path, enabled, billing, live):
     runner = Runner()
-    adapter = DeepSeekAdapter(runner=runner, enabled=enabled, billing_confirmed=billing,
-                              live_confirmed=live, validated_ready=ready)
+    adapter = DeepSeekAdapter(runner=runner, enabled=enabled, billing_confirmed=billing, live_confirmed=live)
     assert adapter.run(request(tmp_path)).status is AgentStatus.UNAVAILABLE
     assert runner.calls == []
 
@@ -40,7 +39,7 @@ def test_deepseek_direct_run_fails_closed(tmp_path, enabled, billing, live, read
 def test_atomic_budget_reservation_accounts_interrupted_and_unknown_cost(tmp_path):
     store = TaskStore(tmp_path); task = store.create_task(TaskSpec(
         goal="x", scope=["x"], acceptance=["x"], budget=Budget(max_agent_calls=1, max_minutes=1, max_usd=0)))
-    call = store.reserve_agent_call(task.id, estimated_usd=None)
+    call = store.reserve_agent_call(task.id, estimated_usd=0.0)
     assert store.runtime(task.id).agent_calls == 1
     with pytest.raises(BudgetExceeded): store.reserve_agent_call(task.id, estimated_usd=0)
     store.interrupt_agent_call(task.id, call, "crash")
@@ -62,7 +61,7 @@ def test_structured_outcomes_only_and_missing_report_evidence(tmp_path):
     store.record_outcome(task.id, StageOutcome(stage="verify", status="passed", summary="tests pass"))
     report = render_persisted_report(store, task.id)
     assert "tests pass" in report and "unknown/missing" in report
-    with pytest.raises(Exception): StageOutcome(stage="review", status="passed", summary="chain-of-thought: secret")
+    with pytest.raises(Exception): StageOutcome(stage="review", status="passed", summary="ok", reasoning="secret")
 
 
 def test_dirty_repository_is_refused_and_branch_prune_requires_approval(tmp_path):

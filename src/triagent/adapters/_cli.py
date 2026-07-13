@@ -155,6 +155,7 @@ def invoke_json(
         data=payload,
         stdout="",
         stderr="",
+        actual_usd=payload.get("actual_usd") if isinstance(payload.get("actual_usd"), (int, float)) else None,
     )
 
 

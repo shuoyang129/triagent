@@ -3,15 +3,19 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from triagent.adapters._cli import invoke_codex_jsonl, probe, read_prompt, runtime
-from triagent.adapters.base import AgentAdapter, AgentCapabilities, AgentRequest, AgentResult
+from triagent.adapters.base import AgentAdapter, AgentCapabilities, AgentRequest, AgentResult, AgentRole, CostEstimate
 from triagent.adapters.process import ProcessRunner
 
 
 class CodexAdapter(AgentAdapter):
-    def __init__(self, runner: ProcessRunner | None = None, secret_values: Sequence[str] = (), command: Sequence[str] = ("codex.exe",)) -> None:
+    identity = "codex"
+    allowed_roles = frozenset({AgentRole.VERIFIER})
+    def __init__(self, runner: ProcessRunner | None = None, secret_values: Sequence[str] = (), command: Sequence[str] = ("codex.exe",), estimated_usd: float | None = None) -> None:
         default_runner, self._env, self._secrets = runtime(("OPENAI_API_KEY", "CODEX_HOME"), secret_values)
         self._runner = runner or default_runner
         self._command = list(command)
+        self._estimated_usd=estimated_usd
+    def estimate_cost(self, request): return CostEstimate(self._estimated_usd)
 
     def capabilities(self) -> AgentCapabilities:
         installed, version = probe(self._runner, [*self._command, "--version"], self._env)

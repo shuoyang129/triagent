@@ -51,6 +51,10 @@ def write_report(path: Path, values: Mapping[str, str]) -> Path:
 def render_persisted_report(store: TaskStore, task_id: str) -> str:
     task = store.load(task_id); outcomes = store.outcomes(task_id)
     verify = outcomes.get("verify"); review = outcomes.get("review"); setup = outcomes.get("setup")
+    approvals=store.runtime(task_id).approvals
+    if task.state.value == "WAITING_FOR_VISUAL_APPROVAL": pending="visual"
+    elif task.state.value == "APPROVAL": pending=", ".join(x for x in ("outcome","merge") if x not in approvals) or "none"
+    else: pending="none"
     values = {
         "state": task.state.value,
         "user outcome": (setup or outcomes.get("implement")).summary if (setup or outcomes.get("implement")) else "unknown/missing",
@@ -59,6 +63,6 @@ def render_persisted_report(store: TaskStore, task_id: str) -> str:
         "visual artifacts": ", ".join(review.artifacts) if review and review.artifacts else "unknown/missing",
         "residual risk": "unknown/missing",
         "rollback": next((o.rollback for o in outcomes.values() if o.rollback != "unknown/missing"), "unknown/missing"),
-        "pending approval": "explicit outcome/merge/deploy/destructive authorization as applicable",
+        "pending approval": pending,
     }
     return render_report(values)

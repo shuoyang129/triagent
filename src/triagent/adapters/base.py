@@ -5,6 +5,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
+from dataclasses import dataclass
 
 
 class AgentRole(StrEnum):
@@ -20,6 +21,16 @@ class AgentStatus(StrEnum):
     TIMED_OUT = "timed_out"
     UNAVAILABLE = "unavailable"
     INVALID_OUTPUT = "invalid_output"
+
+@dataclass(frozen=True)
+class CostEstimate:
+    estimated_usd: float | None
+    zero_cost_enforced: bool = False
+
+    @classmethod
+    def enforced_zero(cls) -> "CostEstimate": return cls(0.0, True)
+    @classmethod
+    def unknown(cls) -> "CostEstimate": return cls(None, False)
 
 
 class AgentCapabilities(BaseModel):
@@ -38,6 +49,7 @@ class AgentRequest(BaseModel):
 
     role: AgentRole
     agent_identity: str = "unspecified"
+    handoff_file: Path | None = None
     task_file: Path
     workdir: Path
     output_schema: str = Field(min_length=1)
@@ -52,9 +64,15 @@ class AgentResult(BaseModel):
     data: dict[str, object] = Field(default_factory=dict)
     stdout: str = ""
     stderr: str = ""
+    actual_usd: float | None = Field(default=None, ge=0)
 
 
 class AgentAdapter(ABC):
+    identity: str = "unknown"
+    allowed_roles: frozenset[AgentRole] = frozenset()
+
+    def estimate_cost(self, request: AgentRequest | None) -> CostEstimate:
+        return CostEstimate.unknown()
     @abstractmethod
     def capabilities(self) -> AgentCapabilities:
         raise NotImplementedError

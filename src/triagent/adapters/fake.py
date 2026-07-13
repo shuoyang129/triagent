@@ -8,10 +8,14 @@ from triagent.adapters.base import (
     AgentRequest,
     AgentResult,
     AgentStatus,
+    AgentRole, CostEstimate,
 )
 
 
 class FakeAgent(AgentAdapter):
+    identity = "fake"
+    allowed_roles = frozenset({AgentRole.IMPLEMENTER, AgentRole.VERIFIER, AgentRole.REVIEWER})
+    def estimate_cost(self, request): return CostEstimate.enforced_zero()
     def __init__(self, results: Iterable[AgentResult]) -> None:
         self._results = list(results)
         self.requests: list[AgentRequest] = []

@@ -81,7 +81,8 @@ class TaskStore:
                 "ALTER TABLE task_runtime ADD COLUMN lease_until REAL",
             ):
                 try: connection.execute(sql)
-                except sqlite3.OperationalError: pass
+                except sqlite3.OperationalError as error:
+                    if "duplicate column name" not in str(error).lower(): raise
             connection.execute("CREATE TABLE IF NOT EXISTS agent_calls(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, status TEXT NOT NULL, estimated_usd REAL, actual_usd REAL, diagnostic TEXT)")
             connection.execute("CREATE TABLE IF NOT EXISTS stage_outcomes(task_id TEXT NOT NULL, stage TEXT NOT NULL, outcome_json TEXT NOT NULL, PRIMARY KEY(task_id, stage))")
 
@@ -116,19 +117,22 @@ class TaskStore:
         approvals = frozenset(json.loads(row["approvals_json"]))
         return TaskRuntime(row["agent_calls"], row["repair_attempts"], approvals, row["completed_calls"], row["interrupted_calls"], row["usd_spent"], row["started_at"])
 
-    def reserve_agent_call(self, task_id: str, estimated_usd: float | None = None) -> str:
+    def reserve_agent_call(self, task_id: str, estimated_usd: float | None = None, lease_owner: str | None = None) -> str:
         connection = self._connect(); call_id = str(uuid.uuid4())
         try:
             connection.execute("BEGIN IMMEDIATE")
             task = connection.execute("SELECT spec_json FROM tasks WHERE id=?", (task_id,)).fetchone()
             runtime = connection.execute("SELECT * FROM task_runtime WHERE task_id=?", (task_id,)).fetchone()
             if task is None or runtime is None: raise KeyError(task_id)
+            import time
+            if runtime["lease_owner"] is not None and (runtime["lease_owner"] != lease_owner or runtime["lease_until"] < time.time()):
+                raise LeaseConflict("controller lease is not owned")
             spec = TaskSpec.model_validate_json(task["spec_json"]); now = datetime.now(UTC)
             started = datetime.fromisoformat(runtime["started_at"]) if runtime["started_at"] else now
             cost = estimated_usd
             if runtime["agent_calls"] >= spec.budget.max_agent_calls or (now-started).total_seconds() >= spec.budget.max_minutes*60:
                 raise BudgetExceeded("call or elapsed-time budget exhausted")
-            if cost is None and spec.budget.max_usd > runtime["usd_spent"]: raise BudgetExceeded("unknown call cost cannot be reserved conservatively")
+            if cost is None: raise BudgetExceeded("unknown call cost cannot be reserved conservatively")
             cost = cost or 0.0
             if runtime["usd_spent"] + cost > spec.budget.max_usd: raise BudgetExceeded("USD budget exhausted")
             connection.execute("UPDATE task_runtime SET agent_calls=agent_calls+1, started_at=CASE WHEN started_at='' THEN ? ELSE started_at END WHERE task_id=?", (now.isoformat(), task_id))
@@ -141,6 +145,9 @@ class TaskStore:
         column = "completed_calls" if status == "completed" else "interrupted_calls"
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            row=connection.execute("SELECT estimated_usd FROM agent_calls WHERE id=? AND task_id=? AND status='started'", (call_id, task_id)).fetchone()
+            if row is None: raise StateConflict("call is not pending")
+            if actual_usd > row["estimated_usd"]: raise BudgetExceeded("actual cost exceeds conservative reservation")
             cursor = connection.execute("UPDATE agent_calls SET status=?,actual_usd=?,diagnostic=? WHERE id=? AND task_id=? AND status='started'", (status, actual_usd, diagnostic, call_id, task_id))
             if cursor.rowcount != 1: raise StateConflict("call is not pending")
             connection.execute(f"UPDATE task_runtime SET {column}={column}+1, usd_spent=usd_spent+? WHERE task_id=?", (actual_usd, task_id))
@@ -157,14 +164,36 @@ class TaskStore:
     def release_lease(self, task_id: str, owner: str) -> None:
         with self._connect() as connection: connection.execute("UPDATE task_runtime SET lease_owner=NULL,lease_until=NULL WHERE task_id=? AND lease_owner=?", (task_id, owner))
 
+    def renew_lease(self, task_id: str, owner: str, seconds: float) -> None:
+        import time
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor=connection.execute("UPDATE task_runtime SET lease_until=? WHERE task_id=? AND lease_owner=? AND lease_until>=?", (time.time()+seconds, task_id, owner, time.time()))
+            if cursor.rowcount != 1: raise LeaseConflict("controller lease lost")
+
     def record_outcome(self, task_id: str, outcome: StageOutcome) -> None:
         with self._connect() as connection: connection.execute("INSERT OR REPLACE INTO stage_outcomes VALUES(?,?,?)", (task_id, outcome.stage, outcome.model_dump_json()))
     def outcomes(self, task_id: str) -> dict[str, StageOutcome]:
         with self._connect() as connection: rows=connection.execute("SELECT * FROM stage_outcomes WHERE task_id=?", (task_id,)).fetchall()
         return {r["stage"]: StageOutcome.model_validate_json(r["outcome_json"]) for r in rows}
-    def fail_setup(self, task_id: str, diagnostic: str) -> None:
-        self.record_outcome(task_id, StageOutcome(stage="setup", status="failed", summary=diagnostic))
+    def fail_setup(self, task_id: str, diagnostic: str, preserved_resources: list[str] | None = None) -> None:
+        self.record_outcome(task_id, StageOutcome(stage="setup", status="failed", summary=diagnostic[:1000], evidence=preserved_resources or []))
         self.transition(task_id, TaskState.SPEC, TaskState.FAILED_FINAL, "setup-failed")
+
+    def approve_and_transition(self, task_id: str, action: str, expected: TaskState, target: TaskState) -> None:
+        timestamp=datetime.now(UTC).isoformat(); connection=self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row=connection.execute("SELECT state FROM tasks WHERE id=?", (task_id,)).fetchone()
+            runtime=connection.execute("SELECT approvals_json FROM task_runtime WHERE task_id=?", (task_id,)).fetchone()
+            if row is None or runtime is None: raise KeyError(task_id)
+            if row["state"] != expected.value: raise StateConflict("approval state changed")
+            approvals=sorted(set(json.loads(runtime[0]))|{action})
+            connection.execute("UPDATE task_runtime SET approvals_json=? WHERE task_id=?", (json.dumps(approvals),task_id))
+            connection.execute("UPDATE tasks SET state=?,updated_at=? WHERE id=?", (target.value,timestamp,task_id)); connection.commit()
+        except Exception: connection.rollback(); raise
+        finally: connection.close()
+        layout=RunLayout(self.runs_root/task_id); layout.write_state(target); layout.append_event({"at":timestamp,"event":f"{action}-approved","state":target.value})
 
     def increment_agent_calls(self, task_id: str) -> TaskRuntime:
         with self._connect() as connection:
