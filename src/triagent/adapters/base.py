@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 from dataclasses import dataclass
+import math
 
 
 class AgentRole(StrEnum):
@@ -26,6 +27,8 @@ class AgentStatus(StrEnum):
 class CostEstimate:
     estimated_usd: float | None
     zero_cost_enforced: bool = False
+    def __post_init__(self):
+        if self.estimated_usd is not None and (isinstance(self.estimated_usd,bool) or not isinstance(self.estimated_usd,(int,float)) or not math.isfinite(self.estimated_usd) or self.estimated_usd < 0): raise ValueError("cost estimate must be finite non-boolean and nonnegative")
 
     @classmethod
     def enforced_zero(cls) -> "CostEstimate": return cls(0.0, True)

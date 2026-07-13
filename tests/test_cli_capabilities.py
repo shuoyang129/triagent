@@ -21,7 +21,8 @@ class FakeRunner:
         self.results = list(results)
         self.calls: list[tuple[list[str], Path, float, dict[str, str]]] = []
 
-    def run(self, argv, cwd, timeout, env_allowlist):
+    def run(self, argv, cwd, timeout, env_allowlist, stdin=None):
+        self.stdin = stdin
         self.calls.append((list(argv), Path(cwd), timeout, dict(env_allowlist)))
         result = self.results.pop(0)
         if isinstance(result, BaseException):
@@ -30,8 +31,8 @@ class FakeRunner:
 
 
 class SentinelRunner(FakeRunner):
-    def run(self, argv, cwd, timeout, env_allowlist):
-        result = super().run(argv, cwd, timeout, env_allowlist)
+    def run(self, argv, cwd, timeout, env_allowlist, stdin=None):
+        result = super().run(argv, cwd, timeout, env_allowlist, stdin)
         prompt = argv[-1]
         match = re.search(r'TRIAGENT_SENTINEL=(\{.*\})', prompt)
         if match:
@@ -45,8 +46,8 @@ class SentinelRunner(FakeRunner):
 
 
 class DirectorySentinelRunner(FakeRunner):
-    def run(self, argv, cwd, timeout, env_allowlist):
-        result = super().run(argv, cwd, timeout, env_allowlist)
+    def run(self, argv, cwd, timeout, env_allowlist, stdin=None):
+        result = super().run(argv, cwd, timeout, env_allowlist, stdin)
         match = re.search(r'TRIAGENT_SENTINEL=(\{.*\})', argv[-1])
         if match:
             contract = json.loads(match.group(1))
@@ -166,11 +167,11 @@ def test_codex_jsonl_rejects_malformed_or_no_message_stream(agent_request: Agent
 
 
 def test_cursor_uses_wsl_argv_and_does_not_interpolate_prompt(agent_request: AgentRequest) -> None:
-    runner = FakeRunner(completed('{"status":"passed"}'))
+    nested=json.dumps({"status":"passed"}); runner = FakeRunner(completed(json.dumps({"type":"result","subtype":"success","is_error":False,"result":nested})))
     result = CursorAdapter(runner=runner).run(agent_request)
     argv = runner.calls[0][0]
     assert argv[:5] == ["wsl.exe", "--distribution", "Ubuntu-24.04", "--exec", "bash"]
-    assert "--input-file" in argv
+    assert "--input-file" not in argv and "--output-format" in argv and "json" in argv
     assert "$(touch nope)" not in " ".join(argv)
     assert "$(touch nope)" not in argv[6]
     assert result.status is AgentStatus.SUCCEEDED
@@ -225,9 +226,9 @@ def test_sentinel_unlink_failure_forces_smoke_false(tmp_path: Path, monkeypatch:
 
 def test_antigravity_print_mode_never_skips_permissions(agent_request: AgentRequest) -> None:
     runner = FakeRunner(completed('{"status":"passed"}'))
-    result = AntigravityAdapter(runner=runner).run(agent_request)
+    result = AntigravityAdapter(runner=runner,acl_verifier=lambda directory,file: True).run(agent_request)
     argv = runner.calls[0][0]
-    assert argv[:2] == ["agy.exe", "--print"]
+    assert argv[:2] == ["agy.exe", "-p"]
     assert "--dangerously-skip-permissions" not in argv
     assert result.status is AgentStatus.SUCCEEDED
 

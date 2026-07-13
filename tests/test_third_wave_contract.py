@@ -15,10 +15,11 @@ from triagent.orchestrator import Orchestrator
 
 class Runner:
     def __init__(self,result=None): self.calls=[]; self.inputs=[]; self.paths=[]; self.result=result
-    def run(self,argv,cwd,timeout,env):
+    def run(self,argv,cwd,timeout,env,stdin=None):
         self.calls.append(list(argv))
-        if "--input-file" in argv:
-            path=Path(argv[argv.index("--input-file")+1]); self.paths.append(path); self.inputs.append(path.read_bytes())
+        if stdin is not None:self.inputs.append(stdin.encode())
+        elif "-p" in argv:
+            path=Path(argv[-1].rsplit(": ",1)[1]); self.paths.append(path); self.inputs.append(path.read_bytes())
         if isinstance(self.result,BaseException): raise self.result
         return self.result
 
@@ -43,7 +44,7 @@ def test_deepseek_capability_without_live_confirmation_calls_no_runner(tmp_path)
 def test_real_adapter_runner_receives_exact_task_and_handoff_bytes(tmp_path,adapter_cls,output):
     task=tmp_path/"task.json"; task.write_bytes(b'{"goal":"exact"}')
     handoff=tmp_path/"handoff.json"; handoff.write_bytes(json.dumps({"final_diff":"+exact"*20000}).encode())
-    runner=Runner(ProcessResult(0,output,"",False)); adapter=adapter_cls(runner=runner)
+    runner=Runner(ProcessResult(0,output,"",False)); adapter=adapter_cls(runner=runner,**({"acl_verifier":lambda directory,file:True} if adapter_cls is AntigravityAdapter else {}))
     role=AgentRole.VERIFIER if adapter_cls is CodexAdapter else AgentRole.REVIEWER
     req=AgentRequest(role=role,agent_identity=adapter.identity,task_file=task,handoff_file=handoff,workdir=tmp_path,output_schema="x",timeout_seconds=5)
     adapter.run(req)

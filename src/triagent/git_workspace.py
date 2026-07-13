@@ -126,7 +126,8 @@ class GitWorkspace:
 
     def prune_branch(self, *, store=None, task_id: str | None = None) -> None:
         expected={"repo":str(self.repo),"task_id":self.task_id,"branch":f"triagent/{self.task_id}"}
-        if store is None or task_id is None or task_id != self.task_id or store.approval_resource(task_id,"prune-branch") != expected:
+        record=store.approval_resource(task_id,"prune-branch") if store is not None and task_id is not None else None
+        if store is None or task_id is None or task_id != self.task_id or not record or any(record.get(k)!=v for k,v in expected.items()) or not record.get("resource_version"):
             raise PermissionError("branch pruning requires durable prune-branch approval")
         if self.path.exists():
             raise RuntimeError("clean up the worktree before pruning its preservation branch")

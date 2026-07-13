@@ -30,6 +30,7 @@ class ProcessRunner:
         cwd: Path,
         timeout: float,
         env_allowlist: Mapping[str, str],
+        stdin: str | None = None,
     ) -> ProcessResult:
         if not argv or any(not isinstance(item, str) or not item for item in argv):
             raise ValueError("argv must contain non-empty strings")
@@ -51,6 +52,7 @@ class ProcessRunner:
                 timeout=timeout,
                 shell=False,
                 check=False,
+                input=stdin,
             )
             return ProcessResult(
                 completed.returncode,

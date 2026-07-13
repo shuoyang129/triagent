@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import math
 import tomllib
 from pathlib import Path
 from typing import Annotated
@@ -34,7 +35,7 @@ def _spec(repo: Path, goal: str, budget: Budget | None = None) -> TaskSpec:
 
 def _priced(config: dict, name: str, field: str = "estimated_usd") -> float | None:
     value=config.get("agents",{}).get(name,{}).get(field)
-    return float(value) if isinstance(value,(int,float)) and value >= 0 else None
+    return float(value) if not isinstance(value,bool) and isinstance(value,(int,float)) and math.isfinite(value) and value >= 0 else None
 
 
 def _profile_command(config: dict, name: str) -> list[str]:
@@ -139,7 +140,7 @@ def doctor(profile: Annotated[str, typer.Option()] = "fake") -> None:
     try:
         config = tomllib.loads(profile_path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as error:
-        raise typer.BadParameter(f"Cannot read profile: {profile_path}") from error
+        raise typer.BadParameter("Cannot read selected profile") from error
 
     opencode_enabled = bool(config.get("agents", {}).get("opencode", {}).get("enabled", False))
     probes = (

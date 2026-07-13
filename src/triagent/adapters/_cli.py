@@ -4,7 +4,7 @@ import json
 import os
 import re
 import uuid
-import stat
+import tempfile,shutil,subprocess,time,math
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -57,17 +57,6 @@ def read_prompt(request) -> tuple[str | None, AgentResult | None]:
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
         return None, AgentResult(status=AgentStatus.FAILED, summary="Unable to read task file")
 
-@contextmanager
-def restricted_input(request):
-    payload,error=read_prompt(request)
-    if error: yield None,error; return
-    path=request.workdir/f".triagent-input-{uuid.uuid4().hex}.txt"
-    try:
-        path.write_bytes(payload.encode("utf-8")); path.chmod(stat.S_IRUSR|stat.S_IWUSR)
-        yield path,None
-    finally:
-        path.unlink(missing_ok=True)
-
 class FindingPayload(BaseModel):
     model_config=ConfigDict(extra="forbid",strict=True)
     severity: Literal["BLOCKER","MAJOR","MINOR","NOTE"]
@@ -78,9 +67,47 @@ class CanonicalPayload(BaseModel):
     status: Literal["passed","failed"]
     evidence:list[StrictStr]=Field(default_factory=list,max_length=50)
     artifacts:list[StrictStr]=Field(default_factory=list,max_length=50)
-    actual_usd:float|None=Field(default=None,ge=0)
+    actual_usd:float|None=Field(default=None,ge=0,allow_inf_nan=False,strict=True)
 class ReviewPayload(CanonicalPayload):
     findings:list[FindingPayload]=Field(default_factory=list,max_length=50)
+class CursorEnvelope(BaseModel):
+    model_config=ConfigDict(extra="allow",strict=True)
+    type: Literal["result"]
+    subtype: Literal["success"]
+    is_error: Literal[False]
+    result: StrictStr
+    total_cost_usd: float|None=Field(default=None,ge=0,allow_inf_nan=False,strict=True)
+
+class TransportSecurityError(RuntimeError): pass
+def _windows_acl(directory:Path,file:Path)->bool:
+    user=os.environ.get("USERNAME")
+    if not user:return False
+    for target in (directory,file):
+        grant=f"{user}:(OI)(CI)F" if target==directory else f"{user}:F"
+        result=subprocess.run(["icacls",str(target),"/inheritance:r","/grant:r",grant,"SYSTEM:F"],capture_output=True,text=True,check=False)
+        if result.returncode!=0:return False
+        check=subprocess.run(["icacls",str(target)],capture_output=True,text=True,check=False)
+        lowered=check.stdout.lower()
+        if check.returncode!=0 or any(x in lowered for x in ("everyone:","authenticated users:","builtin\\users:")):return False
+    return True
+@contextmanager
+def external_restricted_input(request,acl_verifier=None):
+    payload,error=read_prompt(request)
+    if error: yield None,error; return
+    directory=Path(tempfile.mkdtemp(prefix="triagent-private-")); file=directory/"input.txt"
+    try:
+        file.write_bytes(payload.encode("utf-8"))
+        if os.name=="nt": secured=(acl_verifier or _windows_acl)(directory,file)
+        else:
+            directory.chmod(0o700); file.chmod(0o600); secured=(directory.stat().st_mode&0o777)==0o700 and (file.stat().st_mode&0o777)==0o600
+        if not secured: raise TransportSecurityError("input transport ACL verification failed")
+        yield file,None
+    finally:
+        for attempt in range(3):
+            try: shutil.rmtree(directory); break
+            except OSError:
+                if attempt==2: raise TransportSecurityError("input transport cleanup failed")
+                time.sleep(.01)
 
 
 def filesystem_probe(
@@ -115,10 +142,10 @@ def invoke_codex_jsonl(
     cwd: Path,
     timeout: float,
     env: Mapping[str, str] | None = None,
-    secret_values: Sequence[str] = (), role: AgentRole = AgentRole.VERIFIER,
+    secret_values: Sequence[str] = (), role: AgentRole = AgentRole.VERIFIER, stdin: str | None = None,
 ) -> AgentResult:
     try:
-        process = runner.run(argv, cwd, timeout, env or {})
+        process = runner.run(argv, cwd, timeout, env or {}, stdin=stdin)
     except (FileNotFoundError, OSError):
         return AgentResult(status=AgentStatus.UNAVAILABLE, summary="CLI executable is unavailable")
     if process.timed_out:
@@ -175,10 +202,10 @@ def invoke_json(
     cwd: Path,
     timeout: float,
     env: Mapping[str, str] | None = None,
-    secret_values: Sequence[str] = (), role: AgentRole = AgentRole.IMPLEMENTER,
+    secret_values: Sequence[str] = (), role: AgentRole = AgentRole.IMPLEMENTER, stdin: str | None = None, cursor_envelope: bool = False,
 ) -> AgentResult:
     try:
-        process = runner.run(argv, cwd, timeout, env or {})
+        process = runner.run(argv, cwd, timeout, env or {}, stdin=stdin)
     except (FileNotFoundError, OSError):
         return AgentResult(status=AgentStatus.UNAVAILABLE, summary="CLI executable is unavailable")
     if process.timed_out:
@@ -197,6 +224,12 @@ def invoke_json(
         return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="CLI returned invalid structured output")
     payload = sanitize(payload, secret_values)
     assert isinstance(payload, dict)
+    actual=payload.get("actual_usd") if isinstance(payload.get("actual_usd"),(int,float)) and not isinstance(payload.get("actual_usd"),bool) and math.isfinite(payload.get("actual_usd")) else None
+    if cursor_envelope:
+        try:
+            envelope=CursorEnvelope.model_validate(payload); payload=json.loads(envelope.result)
+        except (ValidationError,json.JSONDecodeError): return AgentResult(status=AgentStatus.INVALID_OUTPUT,summary="Cursor returned invalid result envelope")
+        actual=envelope.total_cost_usd
     try: data=_canonical(role,payload)
     except ValueError: return AgentResult(status=AgentStatus.INVALID_OUTPUT,summary="CLI returned invalid canonical output")
     return AgentResult(
@@ -204,7 +237,7 @@ def invoke_json(
         data=data,
         stdout="",
         stderr="",
-        actual_usd=payload.get("actual_usd") if isinstance(payload.get("actual_usd"), (int, float)) else None,
+        actual_usd=actual,
     )
 
 
