@@ -92,6 +92,20 @@ def _require_provenance(store: TaskStore, task_id: str, expected: dict[str, str]
     return persisted
 
 
+def _recovery_stage(store: TaskStore, task_id: str) -> str:
+    if store.load(task_id).state is not TaskState.FAILED_RECOVERABLE:
+        raise ValueError("task is not recoverable")
+    checkpoint = store.recovery_checkpoint(task_id)
+    if (
+        checkpoint is None
+        or checkpoint.get("stage") not in {"implement", "verify", "review"}
+        or not isinstance(checkpoint.get("sequence"), int)
+        or checkpoint["sequence"] < 1
+    ):
+        raise ValueError("recovery checkpoint unavailable")
+    return str(checkpoint["stage"])
+
+
 def _status(value: bool | None) -> str:
     if value is None:
         return "unknown"
@@ -196,6 +210,7 @@ def resume(
     store = TaskStore(_root(data_root))
     try:
         store.load(task_id)
+        recovery_stage = _recovery_stage(store, task_id)
         if profile == "fake":
             expected = {
                 "mode": "simulation", "implementer": "fake", "verifier": "fake",
@@ -242,6 +257,15 @@ def resume(
                     billing_confirmed=billing_confirmed, live_confirmed=live_confirmed,
                     estimated_usd=fallback_estimate,
                 )
+                if recovery_stage == "implement":
+                    probe_cost = _priced(config, fallback_name, "probe_estimated_usd")
+                    if probe_cost is None or probe_cost <= 0:
+                        raise ValueError("invalid fallback probe estimate")
+                    capability = store.execute_paid_operation(
+                        task_id, probe_cost, implementer.capabilities
+                    )
+                    if not capability.available or capability.ready is not True:
+                        raise ValueError("persisted DeepSeek implementer is not ready")
             else:
                 raise ValueError("persisted implementer is unavailable")
             orchestrator = Orchestrator(

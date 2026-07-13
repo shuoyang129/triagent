@@ -140,6 +140,7 @@ class TaskStore:
                 "ALTER TABLE task_runtime ADD COLUMN started_at TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE task_runtime ADD COLUMN lease_owner TEXT",
                 "ALTER TABLE task_runtime ADD COLUMN lease_until REAL",
+                "ALTER TABLE task_runtime ADD COLUMN recovery_sequence INTEGER NOT NULL DEFAULT 0",
             ):
                 try: connection.execute(sql)
                 except sqlite3.OperationalError as error:
@@ -162,6 +163,7 @@ class TaskStore:
             connection.execute("CREATE TABLE IF NOT EXISTS approval_requests_versions(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action,resource_json))")
             connection.execute("CREATE TABLE IF NOT EXISTS system_attestations(task_id TEXT NOT NULL, name TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(task_id,name))")
             connection.execute("CREATE TABLE IF NOT EXISTS execution_provenance(task_id TEXT PRIMARY KEY, mode TEXT NOT NULL, implementer TEXT NOT NULL, verifier TEXT NOT NULL, reviewer TEXT NOT NULL, profile_digest TEXT NOT NULL)")
+            connection.execute("CREATE TABLE IF NOT EXISTS recovery_checkpoints(task_id TEXT PRIMARY KEY, stage TEXT NOT NULL, sequence INTEGER NOT NULL, updated_at TEXT NOT NULL)")
             connection.execute("CREATE TABLE IF NOT EXISTS attention_items(task_id TEXT NOT NULL, code TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(task_id,code))")
             connection.execute("CREATE TABLE IF NOT EXISTS consumed_actions(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, consumed_at TEXT NOT NULL, PRIMARY KEY(task_id,action))")
             for table in ("approval_records_versions","approval_requests_versions"):
@@ -373,6 +375,133 @@ class TaskStore:
                 (task_id,),
             ).fetchone()
         return dict(row) if row is not None else None
+
+    def recovery_checkpoint(self, task_id: str) -> dict[str, object] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT stage,sequence,updated_at FROM recovery_checkpoints WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def transition_recoverable(
+        self,
+        task_id: str,
+        expected: TaskState,
+        stage: str,
+        event: str,
+    ) -> StoredTask:
+        if stage not in {"implement", "verify", "review"}:
+            raise ValueError("invalid recovery checkpoint stage")
+        timestamp = datetime.now(UTC).isoformat()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            task = connection.execute(
+                "SELECT state FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            runtime = connection.execute(
+                "SELECT recovery_sequence FROM task_runtime WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if task is None or runtime is None:
+                raise KeyError(task_id)
+            if task["state"] != expected.value:
+                raise StateConflict(f"expected {expected.value}, found {task['state']}")
+            sequence = runtime["recovery_sequence"] + 1
+            connection.execute(
+                "UPDATE task_runtime SET recovery_sequence=? WHERE task_id=?",
+                (sequence, task_id),
+            )
+            connection.execute(
+                "INSERT INTO recovery_checkpoints(task_id,stage,sequence,updated_at) VALUES(?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET stage=excluded.stage,sequence=excluded.sequence,updated_at=excluded.updated_at",
+                (task_id, stage, sequence, timestamp),
+            )
+            connection.execute(
+                "UPDATE tasks SET state=?,updated_at=? WHERE id=?",
+                (TaskState.FAILED_RECOVERABLE.value, timestamp, task_id),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        layout = RunLayout(self.runs_root / task_id)
+        layout.write_state(TaskState.FAILED_RECOVERABLE)
+        layout.append_event({
+            "at": timestamp, "event": event,
+            "state": TaskState.FAILED_RECOVERABLE.value,
+            "recovery_stage": stage, "recovery_sequence": sequence,
+        })
+        return self.load(task_id)
+
+    def accept_recovery(
+        self,
+        task_id: str,
+        *,
+        stage: str,
+        sequence: int,
+        target: TaskState,
+        lease_owner: str,
+    ) -> StoredTask:
+        expected_target = {
+            "implement": TaskState.IMPLEMENT,
+            "verify": TaskState.VERIFY,
+            "review": TaskState.REVIEW,
+        }.get(stage)
+        if expected_target is not target:
+            raise ValueError("recovery checkpoint target mismatch")
+        timestamp = datetime.now(UTC).isoformat()
+        connection = self._connect()
+        try:
+            import time
+            connection.execute("BEGIN IMMEDIATE")
+            task = connection.execute(
+                "SELECT state FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            runtime = connection.execute(
+                "SELECT lease_owner,lease_until FROM task_runtime WHERE task_id=?", (task_id,)
+            ).fetchone()
+            checkpoint = connection.execute(
+                "SELECT stage,sequence FROM recovery_checkpoints WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if task is None or runtime is None:
+                raise KeyError(task_id)
+            if task["state"] != TaskState.FAILED_RECOVERABLE.value:
+                raise StateConflict("task is not recoverable")
+            if (
+                runtime["lease_owner"] != lease_owner
+                or runtime["lease_until"] is None
+                or runtime["lease_until"] < time.time()
+            ):
+                raise LeaseConflict("controller lease is not owned")
+            if (
+                checkpoint is None
+                or checkpoint["stage"] != stage
+                or checkpoint["sequence"] != sequence
+            ):
+                raise StateConflict("recovery checkpoint changed")
+            connection.execute(
+                "UPDATE task_runtime SET repair_attempts=repair_attempts+1 WHERE task_id=?",
+                (task_id,),
+            )
+            connection.execute("DELETE FROM recovery_checkpoints WHERE task_id=?", (task_id,))
+            connection.execute(
+                "UPDATE tasks SET state=?,updated_at=? WHERE id=?",
+                (target.value, timestamp, task_id),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        layout = RunLayout(self.runs_root / task_id)
+        layout.write_state(target)
+        layout.append_event({
+            "at": timestamp, "event": f"resume-{stage}", "state": target.value,
+        })
+        return self.load(task_id)
 
     @staticmethod
     def _git_plumbing(work:Path,args:list[str],stdin:bytes|None=None)->bytes:

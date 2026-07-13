@@ -129,7 +129,9 @@ class Orchestrator:
             diagnostic = "adapter-exception"
             self.store.interrupt_agent_call(task_id, call_id, diagnostic)
             self._record_transport_failure(task_id, request.role, diagnostic)
-            self.store.transition(task_id, state, TaskState.FAILED_RECOVERABLE, diagnostic)
+            self.store.transition_recoverable(
+                task_id, state, self._failed_stage(request.role), diagnostic
+            )
             return None
         if self._lease_owner: self.store.renew_lease(task_id, self._lease_owner, 600)
         actual = 0.0 if estimate.zero_cost_enforced else result.actual_usd
@@ -141,12 +143,16 @@ class Orchestrator:
         if result.status is not AgentStatus.SUCCEEDED:
             if diagnostic == "transport-cleanup-failed":self.store.record_attention(task_id,diagnostic)
             self._record_transport_failure(task_id, request.role, diagnostic)
-            self.store.transition(task_id, state, TaskState.FAILED_RECOVERABLE, diagnostic)
+            self.store.transition_recoverable(
+                task_id, state, self._failed_stage(request.role), diagnostic
+            )
             return None
         if result.data.get("status") == "failed":
-            stage={AgentRole.IMPLEMENTER:"implement",AgentRole.VERIFIER:"verify",AgentRole.REVIEWER:"review"}[request.role]
+            stage=self._failed_stage(request.role)
             self.store.record_outcome(task_id,self._outcome(stage,result,status="failed"))
-            self.store.transition(task_id,state,TaskState.FAILED_RECOVERABLE,"canonical-stage-failed")
+            self.store.transition_recoverable(
+                task_id, state, stage, "canonical-stage-failed"
+            )
             return None
         return result
 
@@ -215,10 +221,10 @@ class Orchestrator:
                             diagnostic=diagnostic,
                         ),
                     )
-                    return self.store.transition(
+                    return self.store.transition_recoverable(
                         task_id,
                         state,
-                        TaskState.FAILED_RECOVERABLE,
+                        "implement",
                         diagnostic,
                     ).state
                 raise
@@ -289,7 +295,16 @@ class Orchestrator:
             task=self.store.load(task_id)
             if task.state not in BLOCKED_STATES:
                 self.store.record_outcome(task_id,StageOutcome(stage="setup",status="failed",summary="execution-failed",diagnostic=type(error).__name__))
-                self.store.transition(task_id,task.state,TaskState.FAILED_RECOVERABLE,"execution-failed")
+                stage = {
+                    TaskState.IMPLEMENT: "implement", TaskState.REPAIR: "implement",
+                    TaskState.VERIFY: "verify", TaskState.REVIEW: "review",
+                }.get(task.state)
+                if stage is None:
+                    self.store.transition(task_id,task.state,TaskState.FAILED_RECOVERABLE,"execution-failed")
+                else:
+                    self.store.transition_recoverable(
+                        task_id, task.state, stage, "execution-failed"
+                    )
             raise
         finally: self.store.release_lease(task_id, owner); self._lease_owner=None
 
@@ -310,14 +325,15 @@ class Orchestrator:
                 raise ValueError("execution provenance is missing")
             if persisted_provenance != self._execution_provenance():
                 raise ValueError("execution provenance mismatch")
-            failed = [
-                outcome
-                for stage, outcome in self.store.outcomes(task_id).items()
-                if stage in {"implement", "verify", "review"} and outcome.status == "failed"
-            ]
-            if len(failed) != 1:
-                raise ValueError("recoverable failed stage outcome is missing or ambiguous")
-            stage = failed[0].stage
+            checkpoint = self.store.recovery_checkpoint(task_id)
+            if (
+                checkpoint is None
+                or checkpoint.get("stage") not in {"implement", "verify", "review"}
+                or not isinstance(checkpoint.get("sequence"), int)
+                or checkpoint["sequence"] < 1
+            ):
+                raise ValueError("recovery checkpoint is missing or invalid")
+            stage = checkpoint["stage"]
             target = {
                 "implement": TaskState.IMPLEMENT,
                 "verify": TaskState.VERIFY,
@@ -340,12 +356,12 @@ class Orchestrator:
             )
             if stage in {"verify", "review"}:
                 self.store.restore_candidate_worktree(task_id)
-            self.store.increment_repair_attempts(task_id)
-            self.store.transition(
+            self.store.accept_recovery(
                 task_id,
-                TaskState.FAILED_RECOVERABLE,
-                target,
-                f"resume-{stage}",
+                stage=stage,
+                sequence=checkpoint["sequence"],
+                target=target,
+                lease_owner=owner,
             )
             for _ in range(100):
                 state = self.advance(task_id)
@@ -366,12 +382,19 @@ class Orchestrator:
                         diagnostic=type(error).__name__,
                     ),
                 )
-                self.store.transition(
-                    task_id,
-                    current.state,
-                    TaskState.FAILED_RECOVERABLE,
-                    "execution-failed",
-                )
+                stage = {
+                    TaskState.IMPLEMENT: "implement", TaskState.REPAIR: "implement",
+                    TaskState.VERIFY: "verify", TaskState.REVIEW: "review",
+                }.get(current.state)
+                if stage is None:
+                    self.store.transition(
+                        task_id, current.state, TaskState.FAILED_RECOVERABLE,
+                        "execution-failed",
+                    )
+                else:
+                    self.store.transition_recoverable(
+                        task_id, current.state, stage, "execution-failed"
+                    )
             raise
         finally:
             self.store.release_lease(task_id, owner)

@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from triagent.adapters.antigravity import AntigravityAdapter
-from triagent.adapters.base import AgentRole
+from triagent.adapters.base import AgentResult, AgentRole, AgentStatus
 from triagent.adapters.codex import CodexAdapter
 from triagent.adapters.cursor import CursorAdapter
 from triagent.adapters.fake import FakeAgent
@@ -18,7 +18,7 @@ from triagent.adapters.process import ProcessResult
 from triagent.domain import Budget, RiskLevel, StageOutcome, TaskSpec, TaskState
 from triagent.git_workspace import GitWorkspace
 from triagent.orchestrator import Orchestrator
-from triagent.store import BudgetExceeded, TaskStore
+from triagent.store import BudgetExceeded, StateConflict, TaskStore
 
 
 def _png_chunk(kind:bytes,payload:bytes)->bytes:
@@ -209,8 +209,10 @@ def test_resume_rejects_invalid_state_missing_outcome_and_exhausted_limits(tmp_p
             task.id, mode="simulation", implementer="fake", verifier="fake",
             reviewer="fake", profile_digest="fake-v1",
         )
-        if name != "invalid":
+        if name == "missing":
             store.transition(task.id, TaskState.SPEC, TaskState.FAILED_RECOVERABLE, "test")
+        elif name != "invalid":
+            store.transition_recoverable(task.id, TaskState.SPEC, "verify", "test")
         if name in {"repairs", "budget"}:
             store.record_outcome(task.id, StageOutcome(
                 stage="verify", status="failed", summary="requires-repair"
@@ -227,6 +229,100 @@ def test_resume_rejects_invalid_state_missing_outcome_and_exhausted_limits(tmp_p
             orchestrator.resume_until_blocked(task.id)
         assert all(agent.requests == [] for agent in agents)
         assert store.runtime(task.id).repair_attempts == (2 if name == "repairs" else 0)
+
+
+def test_review_repair_implementation_failure_replaces_recovery_checkpoint(tmp_path):
+    major = AgentResult(
+        status=AgentStatus.SUCCEEDED,
+        data={"status": "passed", "findings": [{"severity": "MAJOR", "message": "repair"}]},
+    )
+    initial = Orchestrator(
+        TaskStore(tmp_path),
+        FakeAgent([
+            AgentResult(status=AgentStatus.SUCCEEDED),
+            AgentResult(status=AgentStatus.UNAVAILABLE),
+        ]),
+        FakeAgent([AgentResult(status=AgentStatus.SUCCEEDED)]),
+        FakeAgent([major]),
+    )
+    store = initial.store
+    task = store.create_task(TaskSpec(goal="x", scope=[str(tmp_path)], acceptance=["x"]))
+
+    assert initial.run_until_blocked(task.id) is TaskState.FAILED_RECOVERABLE
+    assert store.outcomes(task.id)["review"].status == "failed"
+    assert store.recovery_checkpoint(task.id)["stage"] == "implement"
+
+    implementer = FakeAgent([AgentResult(status=AgentStatus.SUCCEEDED)])
+    verifier = FakeAgent([AgentResult(status=AgentStatus.SUCCEEDED)])
+    reviewer = FakeAgent([AgentResult(status=AgentStatus.SUCCEEDED)])
+    resumed = Orchestrator(store, implementer, verifier, reviewer)
+
+    assert resumed.resume_until_blocked(task.id) is TaskState.APPROVAL
+    assert len(implementer.requests) == 1
+    assert len(verifier.requests) == 1
+    assert len(reviewer.requests) == 1
+    assert store.recovery_checkpoint(task.id) is None
+
+
+def test_review_repair_verification_failure_replaces_recovery_checkpoint(tmp_path):
+    major = AgentResult(
+        status=AgentStatus.SUCCEEDED,
+        data={"status": "passed", "findings": [{"severity": "MAJOR", "message": "repair"}]},
+    )
+    store = TaskStore(tmp_path)
+    initial = Orchestrator(
+        store,
+        FakeAgent([
+            AgentResult(status=AgentStatus.SUCCEEDED),
+            AgentResult(status=AgentStatus.SUCCEEDED),
+        ]),
+        FakeAgent([
+            AgentResult(status=AgentStatus.SUCCEEDED),
+            AgentResult(status=AgentStatus.INVALID_OUTPUT),
+        ]),
+        FakeAgent([major]),
+    )
+    task = store.create_task(TaskSpec(goal="x", scope=[str(tmp_path)], acceptance=["x"]))
+
+    assert initial.run_until_blocked(task.id) is TaskState.FAILED_RECOVERABLE
+    assert store.outcomes(task.id)["review"].status == "failed"
+    assert store.recovery_checkpoint(task.id)["stage"] == "verify"
+    # This regression isolates checkpoint selection; production verification
+    # resumes restore a real reviewed candidate before consuming the checkpoint.
+    store.restore_candidate_worktree = lambda _task_id: None
+
+    implementer = FakeAgent([])
+    verifier = FakeAgent([AgentResult(status=AgentStatus.SUCCEEDED)])
+    reviewer = FakeAgent([AgentResult(status=AgentStatus.SUCCEEDED)])
+    resumed = Orchestrator(store, implementer, verifier, reviewer)
+
+    assert resumed.resume_until_blocked(task.id) is TaskState.APPROVAL
+    assert implementer.requests == []
+    assert len(verifier.requests) == 1
+    assert len(reviewer.requests) == 1
+    assert store.recovery_checkpoint(task.id) is None
+
+
+def test_accept_recovery_rejects_a_replaced_same_stage_checkpoint(tmp_path):
+    store = TaskStore(tmp_path)
+    task = store.create_task(TaskSpec(goal="x", scope=[str(tmp_path)], acceptance=["x"]))
+    first = store.transition_recoverable(task.id, TaskState.SPEC, "implement", "first")
+    first_sequence = store.recovery_checkpoint(task.id)["sequence"]
+    store.transition_recoverable(first.id, TaskState.FAILED_RECOVERABLE, "implement", "newer")
+    owner = "resume-controller"
+    store.acquire_lease(task.id, owner, 60)
+
+    with pytest.raises(StateConflict, match="changed"):
+        store.accept_recovery(
+            task.id,
+            stage="implement",
+            sequence=first_sequence,
+            target=TaskState.IMPLEMENT,
+            lease_owner=owner,
+        )
+
+    assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
+    assert store.recovery_checkpoint(task.id)["sequence"] > first_sequence
 
 
 def test_candidate_exists_before_verify_and_reviewer_mutations_never_enter_it(tmp_path):

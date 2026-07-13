@@ -1,4 +1,6 @@
 from pathlib import Path
+import json
+import re
 import subprocess
 import tomllib
 from types import SimpleNamespace
@@ -7,7 +9,12 @@ from typer.testing import CliRunner
 
 from triagent.cli import app
 import triagent.cli as cli_module
-from triagent.domain import RiskLevel, StageOutcome, TaskSpec, TaskState
+from triagent.adapters.antigravity import AntigravityAdapter as RealAntigravityAdapter
+from triagent.adapters.codex import CodexAdapter as RealCodexAdapter
+from triagent.adapters.deepseek import DeepSeekAdapter as RealDeepSeekAdapter
+from triagent.adapters.process import ProcessResult
+from triagent.domain import Budget, RiskLevel, StageOutcome, TaskSpec, TaskState
+from triagent.git_workspace import GitWorkspace
 from triagent.report import REPORT_FIELDS
 from triagent.report import render_report
 from triagent.store import TaskStore
@@ -76,7 +83,7 @@ def test_resume_cli_preserves_task_id_and_reaches_approval(tmp_path: Path) -> No
         task.id, mode="simulation", implementer="fake", verifier="fake",
         reviewer="fake", profile_digest="fake-v1",
     )
-    store.transition(task.id, TaskState.SPEC, TaskState.FAILED_RECOVERABLE, "test")
+    store.transition_recoverable(task.id, TaskState.SPEC, "implement", "test")
 
     result = runner.invoke(app, [
         "resume", "--profile", "fake", "--data-root", str(data), task.id
@@ -179,13 +186,13 @@ def test_deepseek_origin_resume_reconstructs_deepseek_not_cursor(tmp_path: Path,
     store = TaskStore(data)
     task = store.create_task(TaskSpec(goal="goal", scope=[str(tmp_path)], acceptance=["x"]))
     store.record_outcome(task.id, StageOutcome(
-        stage="implement", status="failed", summary="requires-repair"
+        stage="verify", status="failed", summary="requires-repair"
     ))
     store.record_execution_provenance(
         task.id, mode="live", implementer="deepseek", verifier="codex",
         reviewer="antigravity", profile_digest=cli_module._profile_digest(config),
     )
-    store.transition(task.id, TaskState.SPEC, TaskState.FAILED_RECOVERABLE, "test")
+    store.transition_recoverable(task.id, TaskState.SPEC, "verify", "test")
     constructed: list[str] = []
     monkeypatch.setattr(
         cli_module, "CursorAdapter",
@@ -210,6 +217,172 @@ def test_deepseek_origin_resume_reconstructs_deepseek_not_cursor(tmp_path: Path,
 
     assert result.exit_code == 0, result.output
     assert constructed == ["deepseek"]
+
+
+class DeepSeekResumeRunner:
+    def __init__(self, *, available: bool = True) -> None:
+        self.available = available
+        self.calls: list[list[str]] = []
+        self.implementation_calls = 0
+
+    def run(self, argv, cwd, timeout, env_allowlist, stdin=None):
+        argv = list(argv)
+        self.calls.append(argv)
+        if argv[-1] == "--version":
+            return ProcessResult(0 if self.available else 1, "opencode 1", "", False)
+        if "probe" in argv:
+            return ProcessResult(0, '{"reachable":true}', "", False)
+        if "models" in argv:
+            return ProcessResult(0, '{"models":["deepseek/deepseek-chat"]}', "", False)
+        prompt = argv[-1]
+        match = re.search(r"TRIAGENT_SENTINEL=(\{.*\})", prompt)
+        if match:
+            contract = json.loads(match.group(1))
+            Path(contract["path"]).write_text(contract["nonce"], encoding="utf-8")
+            return ProcessResult(0, "sentinel", "", False)
+        self.implementation_calls += 1
+        (Path(cwd) / "candidate.txt").write_text("candidate", encoding="utf-8")
+        return ProcessResult(0, json.dumps({
+            "status": "passed", "evidence": [], "artifacts": [],
+            "changed_paths": ["candidate.txt"], "actual_usd": .1,
+        }), "", False)
+
+
+class ResumeStageRunner:
+    def __init__(self, stage: str) -> None:
+        self.stage = stage
+
+    def run(self, argv, cwd, timeout, env_allowlist, stdin=None):
+        payload = {"status": "passed", "evidence": [], "artifacts": []}
+        if self.stage == "review":
+            payload["findings"] = []
+            return ProcessResult(0, json.dumps(payload | {"actual_usd": .1}), "", False)
+        event = {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": json.dumps(payload)},
+        }
+        return ProcessResult(0, json.dumps(event), "", False)
+
+
+def _deepseek_resume_task(tmp_path: Path, profile: Path, *, max_usd: float = 5):
+    config = _live_profile(profile, deepseek=True)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "x@y"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "x"], cwd=repo, check=True)
+    (repo / "base.txt").write_text("base", encoding="utf-8")
+    subprocess.run(["git", "add", "base.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    store = TaskStore(tmp_path / "data")
+    task = store.create_task(TaskSpec(
+        goal="x", scope=[str(repo)], acceptance=["x"],
+        budget=Budget(max_agent_calls=10, max_minutes=60, max_usd=max_usd),
+    ))
+    work = store.runs_root / task.id / "worktree"
+    work.rmdir()
+    workspace = GitWorkspace.create(repo, task.id, destination=work)
+    store.set_workspace(task.id, str(repo), workspace.base_commit, f"triagent/{task.id}")
+    store.record_outcome(task.id, StageOutcome(
+        stage="implement", status="failed", summary="requires-repair"
+    ))
+    store.record_execution_provenance(
+        task.id, mode="live", implementer="deepseek", verifier="codex",
+        reviewer="antigravity", profile_digest=cli_module._profile_digest(config),
+    )
+    store.transition_recoverable(
+        task.id, TaskState.SPEC, "implement", "test-implementation-failed"
+    )
+    return store, task
+
+
+def test_deepseek_implementation_resume_passes_billed_readiness_and_uses_same_adapter(
+    tmp_path: Path, monkeypatch
+) -> None:
+    profile = tmp_path / "deepseek.toml"
+    store, task = _deepseek_resume_task(tmp_path, profile)
+    deepseek_runner = DeepSeekResumeRunner()
+    monkeypatch.setattr(
+        cli_module, "CursorAdapter",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Cursor constructed")),
+    )
+    monkeypatch.setattr(
+        cli_module, "DeepSeekAdapter",
+        lambda *args, **kwargs: RealDeepSeekAdapter(
+            runner=deepseek_runner, probe_dir=tmp_path, *args, **kwargs
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module, "CodexAdapter",
+        lambda *args, **kwargs: RealCodexAdapter(
+            runner=ResumeStageRunner("verify"), *args, **kwargs
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module, "AntigravityAdapter",
+        lambda *args, **kwargs: RealAntigravityAdapter(
+            runner=ResumeStageRunner("review"), acl_verifier=lambda d, f: True,
+            *args, **kwargs
+        ),
+    )
+
+    result = runner.invoke(app, [
+        "resume", "--profile", str(profile), "--live-confirmed", "--billing-confirmed",
+        "--data-root", str(store.root), task.id,
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert store.load(task.id).state is TaskState.APPROVAL
+    assert deepseek_runner.implementation_calls == 1
+    assert store.runtime(task.id).agent_calls == 4
+
+
+def test_deepseek_resume_unavailable_readiness_refuses_before_implementation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    profile = tmp_path / "deepseek.toml"
+    store, task = _deepseek_resume_task(tmp_path, profile)
+    deepseek_runner = DeepSeekResumeRunner(available=False)
+    monkeypatch.setattr(
+        cli_module, "DeepSeekAdapter",
+        lambda *args, **kwargs: RealDeepSeekAdapter(
+            runner=deepseek_runner, probe_dir=tmp_path, *args, **kwargs
+        ),
+    )
+
+    result = runner.invoke(app, [
+        "resume", "--profile", str(profile), "--live-confirmed", "--billing-confirmed",
+        "--data-root", str(store.root), task.id,
+    ])
+
+    assert result.exit_code != 0
+    assert deepseek_runner.implementation_calls == 0
+    assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
+    assert store.runtime(task.id).repair_attempts == 0
+
+
+def test_deepseek_resume_probe_budget_refuses_without_probe_or_implementation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    profile = tmp_path / "deepseek.toml"
+    store, task = _deepseek_resume_task(tmp_path, profile, max_usd=.1)
+    deepseek_runner = DeepSeekResumeRunner()
+    monkeypatch.setattr(
+        cli_module, "DeepSeekAdapter",
+        lambda *args, **kwargs: RealDeepSeekAdapter(
+            runner=deepseek_runner, probe_dir=tmp_path, *args, **kwargs
+        ),
+    )
+
+    result = runner.invoke(app, [
+        "resume", "--profile", str(profile), "--live-confirmed", "--billing-confirmed",
+        "--data-root", str(store.root), task.id,
+    ])
+
+    assert result.exit_code != 0
+    assert deepseek_runner.calls == []
+    assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
+    assert store.runtime(task.id).repair_attempts == 0
 
 
 def test_resume_cli_real_profile_requires_gates_and_available_configuration(tmp_path: Path) -> None:
