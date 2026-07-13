@@ -55,7 +55,7 @@ def request(tmp_path: Path, role: AgentRole) -> AgentRequest:
 @pytest.mark.parametrize(
     ("role", "adapter", "output"),
     [
-        (AgentRole.IMPLEMENTER, CursorAdapter, ProcessResult(0, json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": json.dumps({"status": "passed", "evidence": [], "artifacts": []})}), "", False)),
+        (AgentRole.IMPLEMENTER, CursorAdapter, ProcessResult(0, json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": json.dumps({"status": "passed", "evidence": [], "artifacts": [], "changed_paths": []})}), "", False)),
         (AgentRole.VERIFIER, CodexAdapter, ProcessResult(0, json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps({"status": "passed", "evidence": [], "artifacts": []})}}), "", False)),
         (AgentRole.REVIEWER, AntigravityAdapter, ProcessResult(0, json.dumps({"status": "passed", "evidence": [], "artifacts": [], "findings": []}), "", False)),
     ],

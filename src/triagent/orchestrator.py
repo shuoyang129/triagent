@@ -107,7 +107,7 @@ class Orchestrator:
     @staticmethod
     def _outcome(stage: str, result, *, status: str = "passed") -> StageOutcome:
         data=result.data
-        allowed={"status","summary_code","evidence","artifacts","findings","tests","actual_usd"}
+        allowed={"status","summary_code","evidence","artifacts","findings","tests","actual_usd","changed_paths"}
         if set(data)-allowed: raise ValueError("adapter result contains non-allowlisted fields")
         evidence=data.get("evidence", []); artifacts=data.get("artifacts", []); findings=data.get("findings",[])
         if not isinstance(evidence,list) or not all(isinstance(x,str) for x in evidence): raise ValueError("invalid evidence schema")
@@ -138,7 +138,7 @@ class Orchestrator:
             )
             if result is None:
                 return self.store.load(task_id).state
-            self.store.record_outcome(task_id, self._outcome("implement", result)); self.store.materialize_reviewed_commit(task_id); self._write_handoff(task_id)
+            self.store.record_outcome(task_id, self._outcome("implement", result)); self.store.materialize_reviewed_commit(task_id,result.data.get("changed_paths")); self._write_handoff(task_id)
             return self.store.transition(task_id, state, TaskState.VERIFY, "implementation-complete").state
         if state is TaskState.VERIFY:
             result = self._call(

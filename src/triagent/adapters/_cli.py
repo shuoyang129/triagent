@@ -65,6 +65,9 @@ def read_prompt(request) -> tuple[str | None, AgentResult | None]:
             "actual_usd":{"type":["number","null"],"minimum":0},
         }
         required=["status","evidence","artifacts"]
+        if role is AgentRole.IMPLEMENTER:
+            properties["changed_paths"]={"type":"array","maxItems":10000,"items":{"type":"string","minLength":1,"maxLength":1024}}
+            required.append("changed_paths")
         if role is AgentRole.REVIEWER:
             properties["findings"]={"type":"array","maxItems":50,"items":{"type":"object","additionalProperties":False,"required":["severity","code","message"],"properties":{"severity":{"type":"string","enum":["BLOCKER","MAJOR","MINOR","NOTE"]},"code":{"type":"string","minLength":1,"maxLength":100},"message":{"type":"string","minLength":1,"maxLength":500}}}}
             required.append("findings")
@@ -94,6 +97,8 @@ class CanonicalPayload(BaseModel):
     evidence:list[StrictStr]=Field(max_length=50)
     artifacts:list[StrictStr]=Field(max_length=50)
     actual_usd:float|None=Field(default=None,ge=0,allow_inf_nan=False,strict=True)
+class ImplementerPayload(CanonicalPayload):
+    changed_paths:list[StrictStr]=Field(max_length=10000)
 class ReviewPayload(CanonicalPayload):
     findings:list[FindingPayload]=Field(max_length=50)
 class CursorEnvelope(BaseModel):
@@ -250,10 +255,12 @@ def invoke_codex_jsonl(
     return AgentResult(status=AgentStatus.SUCCEEDED, data=data,actual_usd=actual)
 
 def _canonical(role: AgentRole, payload: dict) -> dict:
-    try: parsed=(ReviewPayload if role is AgentRole.REVIEWER else CanonicalPayload).model_validate(payload)
+    model=ReviewPayload if role is AgentRole.REVIEWER else ImplementerPayload if role is AgentRole.IMPLEMENTER else CanonicalPayload
+    try: parsed=model.model_validate(payload)
     except ValidationError as error: raise ValueError from error
     data={"status":parsed.status,"summary_code":{AgentRole.IMPLEMENTER:"completed",AgentRole.VERIFIER:"verified",AgentRole.REVIEWER:"clean"}[role],"evidence":parsed.evidence,"artifacts":parsed.artifacts}
     if role is AgentRole.REVIEWER: data["findings"]=[x.model_dump() for x in parsed.findings]
+    if role is AgentRole.IMPLEMENTER: data["changed_paths"]=parsed.changed_paths
     return data
 
 

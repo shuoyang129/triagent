@@ -52,7 +52,14 @@ class GitWorkspace:
     @classmethod
     def validate(cls, repo: Path) -> tuple[Path,str]:
         repo=Path(repo).resolve(); base=_git(repo,"rev-parse","HEAD")
-        if _git(repo,"status","--porcelain","--","."): raise RuntimeError("dirty source checkout; commit or stash changes before creating a task")
+        dirty=_git(repo,"status","--porcelain=v2","--",".").splitlines()
+        # An uninitialized/missing worktree for an already-committed gitlink is
+        # not candidate content. Allow setup to proceed so candidate validation
+        # can reject the gitlink explicitly; every other dirty entry stays fatal.
+        for row in dirty:
+            fields=row.split(" ",8)
+            if len(fields)!=9 or fields[0]!="1" or fields[1]!=".D" or fields[3]!="160000":
+                raise RuntimeError("dirty source checkout; commit or stash changes before creating a task")
         return repo,base
 
     @classmethod
@@ -129,11 +136,11 @@ class GitWorkspace:
         record=store.approval_resource(task_id,"prune-branch") if store is not None and task_id is not None else None
         if store is None or task_id is None or task_id != self.task_id or not record or any(record.get(k)!=v for k,v in expected.items()) or not record.get("resource_version"):
             raise PermissionError("branch pruning requires durable prune-branch approval")
-        store.consume_approval(task_id,"prune-branch")
+        candidate=store.consume_approval(task_id,"prune-branch")
         if self.path.exists():
             raise RuntimeError("clean up the worktree before pruning its preservation branch")
         _git(self.repo, "branch", "-D", f"triagent/{self.task_id}")
-        store.delete_candidate_ref(task_id)
+        store.delete_candidate_ref(task_id,candidate)
 
 
 def _git(cwd: Path, *args: str) -> str:

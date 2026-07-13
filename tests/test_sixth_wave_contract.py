@@ -21,7 +21,7 @@ def req(tmp_path,role,size=200000):
     return AgentRequest(role=role,task_file=task,handoff_file=hand,workdir=tmp_path,output_schema="x",timeout_seconds=5)
 
 def test_cursor_captured_help_contract_and_nested_wrapper_stdin(tmp_path):
-    nested=json.dumps({"status":"passed","evidence":["ok"],"artifacts":[]});runner=Runner(ProcessResult(0,json.dumps({"type":"result","subtype":"success","is_error":False,"result":nested,"total_cost_usd":.2}),"",False))
+    nested=json.dumps({"status":"passed","evidence":["ok"],"artifacts":[],"changed_paths":[]});runner=Runner(ProcessResult(0,json.dumps({"type":"result","subtype":"success","is_error":False,"result":nested,"total_cost_usd":.2}),"",False))
     result=CursorAdapter(runner=runner).run(req(tmp_path,AgentRole.IMPLEMENTER))
     argv=runner.calls[0];assert result.status is AgentStatus.SUCCEEDED and argv[-3:]==["--print","--output-format","json"]
     assert runner.stdin[0].startswith("TRIAGENT_CONTROLLER_PROMPT_V2") and "--input-file" not in argv and not list(tmp_path.glob(".triagent-input-*"))

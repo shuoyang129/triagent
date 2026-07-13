@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import subprocess
+import zlib
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,9 @@ from triagent.orchestrator import Orchestrator
 from triagent.store import TaskStore
 
 
-VALID_PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+def _png_chunk(kind:bytes,payload:bytes)->bytes:
+    return len(payload).to_bytes(4,"big")+kind+payload+zlib.crc32(kind+payload).to_bytes(4,"big")
+VALID_PNG=b"\x89PNG\r\n\x1a\n"+_png_chunk(b"IHDR",(1).to_bytes(4,"big")*2+bytes([8,2,0,0,0]))+_png_chunk(b"IDAT",zlib.compress(b"\x00\xff\x00\x00"))+_png_chunk(b"IEND",b"")
 
 
 def init_repo(path: Path, extra: dict[str, bytes] | None = None) -> str:
@@ -59,6 +62,7 @@ class StageRunner:
 
 def strict(role: AgentRole) -> dict:
     value = {"status": "passed", "evidence": [], "artifacts": []}
+    if role is AgentRole.IMPLEMENTER: value["changed_paths"] = ["candidate.txt"]
     if role is AgentRole.REVIEWER: value["findings"] = []
     return value
 

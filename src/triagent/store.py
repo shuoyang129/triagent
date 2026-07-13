@@ -25,18 +25,22 @@ class StateConflict(RuntimeError):
 class BudgetExceeded(RuntimeError): pass
 class LeaseConflict(RuntimeError): pass
 
-_CREDENTIAL_PATH=re.compile(r"(?i)(?:^|[._-])(?:credentials?|secrets?|passwords?|tokens?|api[_-]?keys?)(?:[._-]|$)|(?:^|/)\.env(?:\.|$)|id_rsa|\.(?:pem|key)$")
-_CREDENTIAL_CONTENT=re.compile(r"(?im)^\s*(?:api[_-]?key|token|password|secret|authorization|credential)\s*[:=]\s*['\"]?[^\s'\"]{12,}")
-_SAFE_RASTER_SUFFIXES={".png",".jpg",".jpeg"}
+_CREDENTIAL_PATH=re.compile(r"(?i)(?:^|/)(?:\.env(?:\..*)?|\.npmrc|id_[^/]+|auth[^/]*|credentials?[^/]*|secrets?[^/]*)$|(?:^|[._-])(?:credentials?|secrets?|passwords?|tokens?|api[_-]?keys?|auth)(?:[._-]|$)|\.(?:pem|key)$")
+_CREDENTIAL_CONTENT=re.compile(r"(?is)(?:api[_-]?key|access[_-]?key|client[_-]?secret|auth[_-]?token|token|password|secret|authorization|credential|_authToken)\s*['\"]?\s*[:=]\s*['\"]?(?:bearer\s+)?[^\s,'\"}]{12,}|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\bbearer\s+[A-Za-z0-9._~+/=-]{12,}|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+_SAFE_RASTER_SUFFIXES={".png"}
 _TEXT_LIMIT=1024*1024
 _RASTER_LIMIT=10*1024*1024
+_MAX_CHANGED_FILES=10_000
+_MAX_CHANGED_BYTES=100*1024*1024
+_MAX_PATH_LENGTH=1024
+_MAX_DIRECTORY_DEPTH=32
 
 def _safe_raster(data:bytes,suffix:str)->bool:
     if not data or len(data)>_RASTER_LIMIT:return False
     suffix=suffix.lower()
     if suffix==".png":
         if not data.startswith(b"\x89PNG\r\n\x1a\n"):return False
-        offset=8; width=height=None; idat=[]; seen_ihdr=False; seen_iend=False; bits=color=None
+        offset=8; width=height=None; idat=[]; seen_ihdr=False; seen_iend=False; bits=color=None; seen_idat=False
         while offset+12<=len(data):
             length=struct.unpack(">I",data[offset:offset+4])[0]; kind=data[offset+4:offset+8]; end=offset+12+length
             if length>_RASTER_LIMIT or end>len(data):return False
@@ -46,41 +50,28 @@ def _safe_raster(data:bytes,suffix:str)->bool:
                 if seen_ihdr or offset!=8 or length!=13:return False
                 width,height,bits,color,compression,filter_method,interlace=struct.unpack(">IIBBBBB",payload)
                 if not (1<=width<=8192 and 1<=height<=8192 and width*height<=40_000_000):return False
-                if bits not in {1,2,4,8,16} or color not in {0,2,3,4,6} or compression!=0 or filter_method!=0 or interlace not in {0,1}:return False
+                if bits!=8 or color not in {2,6} or compression!=0 or filter_method!=0 or interlace!=0:return False
                 seen_ihdr=True
-            elif kind==b"IDAT":idat.append(payload)
+            elif kind==b"IDAT":
+                if not seen_ihdr:return False
+                seen_idat=True; idat.append(payload)
             elif kind==b"IEND":
-                if length!=0:return False
+                if length!=0 or not seen_idat:return False
                 seen_iend=True; offset=end; break
+            elif kind[0]&32==0:
+                return False
             offset=end
         if not (seen_ihdr and seen_iend and idat and offset==len(data) and width and height and bits is not None and color is not None):return False
-        channels={0:1,2:3,3:1,4:2,6:4}[color]
-        max_decoded=height*(1+((width*channels*bits+7)//8))
-        try:decoded=zlib.decompress(b"".join(idat))
-        except zlib.error:return False
-        return 0<len(decoded)<=max_decoded and (interlace==1 or len(decoded)==max_decoded)
-    if suffix in {".jpg",".jpeg"}:
-        if len(data)<4 or data[:2]!=b"\xff\xd8" or data[-2:]!=b"\xff\xd9":return False
-        offset=2; dimensions=False
-        while offset<len(data)-2:
-            if data[offset]!=0xff:return False
-            while offset<len(data) and data[offset]==0xff:offset+=1
-            if offset>=len(data):return False
-            marker=data[offset]; offset+=1
-            if marker==0xd9:return dimensions
-            if marker==0xda:
-                return dimensions and data.endswith(b"\xff\xd9")
-            if marker in {0x01,*range(0xd0,0xd8)}:continue
-            if offset+2>len(data):return False
-            length=struct.unpack(">H",data[offset:offset+2])[0]
-            if length<2 or offset+length>len(data):return False
-            if marker in {0xc0,0xc1,0xc2}:
-                if length<8:return False
-                height,width=struct.unpack(">HH",data[offset+3:offset+7])
-                if not (1<=width<=8192 and 1<=height<=8192 and width*height<=40_000_000):return False
-                dimensions=True
-            offset+=length
-        return False
+        channels={2:3,6:4}[color]; row_bytes=width*channels; expected=height*(1+row_bytes)
+        decoder=zlib.decompressobj(); decoded=bytearray()
+        try:
+            for part in idat:
+                decoded.extend(decoder.decompress(part,expected+1-len(decoded)))
+                if len(decoded)>expected or decoder.unconsumed_tail:return False
+            decoded.extend(decoder.flush(expected+1-len(decoded)))
+        except (zlib.error,ValueError):return False
+        if len(decoded)!=expected or not decoder.eof or decoder.unused_data:return False
+        return all(decoded[row*(row_bytes+1)]<=4 for row in range(height))
     return False
 
 
@@ -167,6 +158,7 @@ class TaskStore:
             connection.execute("CREATE TABLE IF NOT EXISTS approval_requests_versions(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action,resource_json))")
             connection.execute("CREATE TABLE IF NOT EXISTS system_attestations(task_id TEXT NOT NULL, name TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(task_id,name))")
             connection.execute("CREATE TABLE IF NOT EXISTS attention_items(task_id TEXT NOT NULL, code TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(task_id,code))")
+            connection.execute("CREATE TABLE IF NOT EXISTS consumed_actions(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, consumed_at TEXT NOT NULL, PRIMARY KEY(task_id,action))")
             for table in ("approval_records_versions","approval_requests_versions"):
                 for column,kind in (("sequence","INTEGER"),("created_at","TEXT")):
                     try: connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
@@ -279,37 +271,82 @@ class TaskStore:
     def _git_plumbing(work:Path,args:list[str],stdin:bytes|None=None)->bytes:
         environment={name:os.environ[name] for name in ("PATH","SYSTEMROOT","WINDIR","COMSPEC","PATHEXT","TEMP","TMP","HOME","USERPROFILE") if os.environ.get(name)}
         environment.update({"GIT_CONFIG_NOSYSTEM":"1","GIT_CONFIG_GLOBAL":os.devnull,"GIT_ATTR_NOSYSTEM":"1","GIT_AUTHOR_NAME":"TriAgent Controller","GIT_AUTHOR_EMAIL":"triagent@localhost","GIT_COMMITTER_NAME":"TriAgent Controller","GIT_COMMITTER_EMAIL":"triagent@localhost"})
-        command=["git","-c",f"core.hooksPath={os.devnull}","-c","commit.gpgSign=false",*args]
+        if args and args[0]=="diff":
+            args=["diff","--no-ext-diff","--no-textconv",*args[1:]]
+        command=["git","-c",f"core.hooksPath={os.devnull}","-c","commit.gpgSign=false","-c","diff.external=","-c","diff.algorithm=myers",*args]
         return subprocess.run(command,cwd=work,env=environment,input=stdin,check=True,capture_output=True).stdout
 
-    def _candidate_manifest(self,task_id:str,work:Path,base:str)->dict[str,tuple[str,str,bytes]]:
+    def _candidate_manifest(self,task_id:str,work:Path,base:str,changed_paths:list[str]|None=None)->dict[str,tuple[str,str,bytes]]:
         try:
-            base_rows=self._git_plumbing(work,["ls-tree","-rz",base]).split(b"\0")
+            base_rows=self._git_plumbing(work,["ls-tree","-r","-z",base]).split(b"\0")
         except (OSError,subprocess.CalledProcessError) as error:raise ValueError("candidate manifest rejected") from error
         base_entries={}
         for row in base_rows:
             if not row:continue
             meta,name=row.split(b"\t",1); mode,kind,oid=meta.decode("ascii").split()
+            if kind=="commit" or mode=="160000":raise ValueError("candidate manifest rejected: gitlink")
+            if kind!="blob" or mode not in {"100644","100755"}:raise ValueError("candidate manifest rejected")
             base_entries[name.decode("utf-8")]=(mode,kind,oid)
+        try:
+            tracked=set(filter(None,self._git_plumbing(work,["ls-files","--cached","-z"]).decode("utf-8").split("\0")))
+            untracked=set(filter(None,self._git_plumbing(work,["ls-files","--others","--exclude-standard","-z"]).decode("utf-8").split("\0")))
+            tracked_changes=set()
+            for name in set(base_entries)|tracked:
+                target=work/name; base_entry=base_entries.get(name)
+                if base_entry is None or not target.exists():
+                    tracked_changes.add(name);continue
+                info=target.lstat()
+                if not stat.S_ISREG(info.st_mode):tracked_changes.add(name);continue
+                digest=hashlib.sha1(usedforsecurity=False);digest.update(b"blob "+str(info.st_size).encode()+b"\0")
+                with target.open("rb") as stream:
+                    while chunk:=stream.read(64*1024):digest.update(chunk)
+                if digest.hexdigest()==base_entry[2]:continue
+                equivalent=False
+                if info.st_size<=_TEXT_LIMIT:
+                    current=target.read_bytes(); original=self._git_plumbing(work,["cat-file","blob",base_entry[2]])
+                    if b"\0" not in current and b"\0" not in original:equivalent=current.replace(b"\r\n",b"\n")==original.replace(b"\r\n",b"\n")
+                if not equivalent:tracked_changes.add(name)
+            actual_changes=tracked_changes|untracked
+        except (OSError,UnicodeError,subprocess.CalledProcessError) as error:raise ValueError("candidate manifest rejected") from error
+        if changed_paths is not None:
+            supplied=set(changed_paths)
+            if len(supplied)!=len(changed_paths) or supplied!=actual_changes:raise ValueError("changed path manifest mismatch")
+        else:
+            changed_paths=sorted(actual_changes)
+        if len(actual_changes)>_MAX_CHANGED_FILES:raise ValueError("candidate limits exceeded")
+        total_bytes=0
+        for name in actual_changes:
+            path=PurePosixPath(name)
+            if path.is_absolute() or "\\" in name or any(part in {"",".",".."} for part in path.parts):raise ValueError("candidate manifest rejected")
+            if len(name)>_MAX_PATH_LENGTH or len(path.parts)>_MAX_DIRECTORY_DEPTH:raise ValueError("candidate limits exceeded")
+            target=work/name
+            if target.exists():
+                try:total_bytes+=target.stat().st_size
+                except OSError as error:raise ValueError("candidate manifest rejected") from error
+                if total_bytes>_MAX_CHANGED_BYTES:raise ValueError("candidate limits exceeded")
+        control_names={name for name in actual_changes if PurePosixPath(name).name in {".gitignore",".gitattributes",".gitmodules"}}
+        if control_names:raise ValueError("candidate manifest rejected")
         manifest={}
         try:
-            for path in sorted(work.rglob("*"),key=lambda p:p.as_posix()):
-                relative=path.relative_to(work).as_posix()
-                if not relative or relative==".git" or relative.startswith(".git/"):continue
+            members=set(base_entries)|untracked|tracked_changes
+            for relative in sorted(members):
+                path=work/relative
+                if not path.exists():continue
                 info=path.lstat()
-                if stat.S_ISDIR(info.st_mode):continue
                 if not stat.S_ISREG(info.st_mode):raise ValueError("candidate manifest rejected")
-                data=path.read_bytes()
                 base_entry=base_entries.get(relative)
-                raw_oid=hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data,usedforsecurity=False).hexdigest()
-                unchanged=base_entry is not None and base_entry[1]=="blob" and raw_oid==base_entry[2]
-                if not unchanged and base_entry is not None and base_entry[1]=="blob" and b"\0" not in data:
-                    try:base_data=self._git_plumbing(work,["cat-file","blob",base_entry[2]])
-                    except (OSError,subprocess.CalledProcessError):base_data=b"\0"
-                    unchanged=data.replace(b"\r\n",b"\n")==base_data.replace(b"\r\n",b"\n")
-                if unchanged:
-                    manifest[relative]=(base_entry[0],base_entry[2],data)
+                if relative not in actual_changes and base_entry is not None:
+                    manifest[relative]=(base_entry[0],base_entry[2],b"")
                     continue
+                limit=_RASTER_LIMIT if path.suffix.lower() in _SAFE_RASTER_SUFFIXES else _TEXT_LIMIT
+                if info.st_size>limit:raise ValueError("candidate manifest rejected")
+                chunks=[]; size=0
+                with path.open("rb") as stream:
+                    while chunk:=stream.read(64*1024):
+                        size+=len(chunk)
+                        if size>limit:raise ValueError("candidate manifest rejected")
+                        chunks.append(chunk)
+                data=b"".join(chunks)
                 if "\n" in relative or "\r" in relative or "\t" in relative or _CREDENTIAL_PATH.search(relative):raise ValueError("candidate manifest rejected")
                 if any(part in {".triagent",".superpowers"} for part in PurePosixPath(relative).parts):raise ValueError("candidate manifest rejected")
                 suffix=path.suffix.lower()
@@ -319,17 +356,11 @@ class TaskStore:
                     if len(data)>_TEXT_LIMIT or b"\0" in data:raise ValueError("candidate manifest rejected")
                     try:text=data.decode("utf-8")
                     except UnicodeDecodeError as error:raise ValueError("candidate manifest rejected") from error
-                    if "-----BEGIN PRIVATE KEY-----" in text or _CREDENTIAL_CONTENT.search(text):raise ValueError("candidate manifest rejected")
+                    if _CREDENTIAL_CONTENT.search(text):raise ValueError("candidate manifest rejected")
                 base_mode=base_entries.get(relative,("100644",None,None))[0]
                 mode="100755" if base_mode=="100755" or (os.name!="nt" and info.st_mode&stat.S_IXUSR) else "100644"
                 manifest[relative]=(mode,"",data)
         except (OSError,UnicodeError,subprocess.CalledProcessError) as error:raise ValueError("candidate manifest rejected") from error
-        control_names={name for name in set(base_entries)|set(manifest) if PurePosixPath(name).name in {".gitignore",".gitattributes",".gitmodules"}}
-        for name in control_names:
-            current=manifest.get(name)
-            base_entry=base_entries.get(name)
-            if current is None or base_entry is None or base_entry[1]!="blob":raise ValueError("candidate manifest rejected")
-            if current[1]!=base_entry[2]:raise ValueError("candidate manifest rejected")
         for name,(mode,oid,data) in list(manifest.items()):
             if not oid:
                 oid=self._git_plumbing(work,["hash-object","-w","--stdin"],data).decode("ascii").strip()
@@ -351,7 +382,12 @@ class TaskStore:
             return self._git_plumbing(work,["mktree","-z"],payload).decode("ascii").strip()
         return build(nodes)
 
-    def materialize_reviewed_commit(self,task_id:str)->str:
+    def _persist_candidate(self,task_id:str,reviewed:str,candidate_ref:str,old:str)->bool:
+        with self._connect() as connection:
+            cursor=connection.execute("UPDATE workspace_meta SET reviewed_commit=?,candidate_ref=? WHERE task_id=? AND COALESCE(reviewed_commit,'')=?",(reviewed,candidate_ref,task_id,old))
+            return cursor.rowcount==1
+
+    def materialize_reviewed_commit(self,task_id:str,changed_paths:list[str]|None=None)->str:
         meta=self.workspace(task_id)
         if meta is None:
             if self.load(task_id).spec.visual_check == "required":raise ValueError("required visual artifact unavailable")
@@ -359,27 +395,38 @@ class TaskStore:
         work=self.runs_root/task_id/"worktree"
         if not work.exists():raise ValueError("candidate materialization failed")
         try:
-            manifest=self._candidate_manifest(task_id,work,meta["base_commit"])
+            manifest=self._candidate_manifest(task_id,work,meta["base_commit"],changed_paths)
             tree=self._candidate_tree(work,manifest)
             reviewed=self._git_plumbing(work,["commit-tree",tree,"-p",meta["base_commit"]],f"triagent candidate {task_id}\n".encode()).decode("ascii").strip()
             actual={}
-            for row in self._git_plumbing(work,["ls-tree","-rz",reviewed]).split(b"\0"):
+            for row in self._git_plumbing(work,["ls-tree","-r","-z",reviewed]).split(b"\0"):
                 if not row:continue
                 entry,name=row.split(b"\t",1); mode,kind,oid=entry.decode("ascii").split(); actual[name.decode("utf-8")]=(mode,oid)
             expected={name:(mode,oid) for name,(mode,oid,_data) in manifest.items()}
             if actual!=expected:raise ValueError("candidate tree mismatch")
-            stable=self._candidate_manifest(task_id,work,meta["base_commit"])
+            stable=self._candidate_manifest(task_id,work,meta["base_commit"],changed_paths)
             if {name:(mode,oid) for name,(mode,oid,_data) in stable.items()}!=expected:raise ValueError("candidate manifest changed")
             candidate_ref=f"refs/triagent/reviewed/{task_id}"
-            self._git_plumbing(work,["update-ref",candidate_ref,reviewed])
+            try:prior_ref=self._git_plumbing(work,["rev-parse","--verify",candidate_ref]).decode().strip()
+            except subprocess.CalledProcessError:prior_ref=""
+            self._git_plumbing(work,["update-ref",candidate_ref,reviewed,prior_ref or "0"*40])
             if self._git_plumbing(work,["rev-parse",candidate_ref]).decode().strip()!=reviewed:raise ValueError("candidate ref mismatch")
         except (OSError,subprocess.CalledProcessError,UnicodeError,ValueError) as error:
-            if isinstance(error,ValueError) and str(error).startswith("candidate manifest rejected"):raise
+            if isinstance(error,ValueError) and str(error).startswith(("candidate manifest rejected","changed path manifest mismatch","candidate limits exceeded")):raise
             raise ValueError("candidate materialization failed") from error
         old=meta["reviewed_commit"] or ""
-        with self._connect() as connection:
-            cursor=connection.execute("UPDATE workspace_meta SET reviewed_commit=?,candidate_ref=? WHERE task_id=? AND COALESCE(reviewed_commit,'')=?",(reviewed,candidate_ref,task_id,old))
-            if cursor.rowcount!=1:raise ValueError("candidate persistence conflict")
+        try:persisted=self._persist_candidate(task_id,reviewed,candidate_ref,old)
+        except Exception:
+            persisted=False
+        if not persisted:
+            try:
+                if prior_ref:self._git_plumbing(work,["update-ref",candidate_ref,prior_ref,reviewed])
+                else:self._git_plumbing(work,["update-ref","-d",candidate_ref,reviewed])
+                if prior_ref:
+                    if self._git_plumbing(work,["rev-parse","--verify",candidate_ref]).decode().strip()!=prior_ref:raise ValueError
+                elif subprocess.run(["git","rev-parse","--verify",candidate_ref],cwd=work,capture_output=True).returncode==0:raise ValueError
+            except Exception as error:raise ValueError("candidate rollback failed") from error
+            raise ValueError("candidate persistence conflict")
         return reviewed
 
     def restore_candidate_worktree(self,task_id:str)->None:
@@ -389,7 +436,7 @@ class TaskStore:
         try:
             if self._git_plumbing(work,["rev-parse",meta["candidate_ref"]]).decode().strip()!=candidate:raise ValueError
             expected={}
-            for row in self._git_plumbing(work,["ls-tree","-rz",candidate]).split(b"\0"):
+            for row in self._git_plumbing(work,["ls-tree","-r","-z",candidate]).split(b"\0"):
                 if not row:continue
                 entry,name_bytes=row.split(b"\t",1); mode,kind,oid=entry.decode("ascii").split(); name=name_bytes.decode("utf-8")
                 if kind!="blob" or mode not in {"100644","100755"}:raise ValueError
@@ -505,6 +552,7 @@ class TaskStore:
             connection.execute("UPDATE task_runtime SET approvals_json=? WHERE task_id=?", (json.dumps(approvals),task_id))
             record_sequence=connection.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM approval_records_versions WHERE task_id=? AND action=?",(task_id,action)).fetchone()[0]
             connection.execute("INSERT INTO approval_records_versions(task_id,action,resource_json,sequence,created_at) VALUES(?,?,?,?,?)",(task_id,action,request[0],record_sequence,timestamp))
+            connection.execute("INSERT INTO consumed_actions(task_id,action,resource_json,consumed_at) VALUES(?,?,?,?)",(task_id,action,request[0],timestamp))
             meta=connection.execute("SELECT * FROM workspace_meta WHERE task_id=?",(task_id,)).fetchone()
             version=self.approval_manifest(task_id)
             canonical=json.dumps(version,sort_keys=True,separators=(",",":")); version["resource_version"]=hashlib.sha256(canonical.encode()).hexdigest(); version["requested_at"]=timestamp
@@ -545,28 +593,39 @@ class TaskStore:
     def approval_resource(self, task_id: str, action: str) -> dict[str,str] | None:
         with self._connect() as connection: row=connection.execute("SELECT resource_json FROM approval_records_versions WHERE task_id=? AND action=? ORDER BY sequence DESC,created_at DESC LIMIT 1",(task_id,action)).fetchone()
         return json.loads(row[0]) if row else None
+    def consumed_actions(self,task_id:str)->list[str]:
+        with self._connect() as connection:rows=connection.execute("SELECT action FROM consumed_actions WHERE task_id=? ORDER BY consumed_at,action",(task_id,)).fetchall()
+        return [row[0] for row in rows]
     def consume_approval(self,task_id:str,action:str)->str:
         if action not in {"outcome","merge","prune-branch"}:raise PermissionError("action has no candidate consumption contract")
-        resource=self.approval_resource(task_id,action); meta=self.workspace(task_id)
-        if not resource or meta is None:raise PermissionError("exact candidate approval required")
-        unsigned={key:value for key,value in resource.items() if key not in {"resource_version","requested_at"}}
-        expected_version=hashlib.sha256(json.dumps(unsigned,sort_keys=True,separators=(",",":")).encode()).hexdigest()
-        candidate=resource.get("reviewed_commit"); candidate_ref=resource.get("candidate_ref")
-        expected_ref=f"refs/triagent/reviewed/{task_id}"
-        if resource.get("resource_version")!=expected_version or resource.get("repo")!=meta["repo"] or resource.get("branch")!=meta["branch"] or resource.get("base_commit")!=meta["base_commit"] or candidate!=meta["reviewed_commit"] or candidate_ref!=meta["candidate_ref"] or candidate_ref!=expected_ref:
-            raise PermissionError("exact candidate approval required")
-        work=self.runs_root/task_id/"worktree"
-        if not work.exists():work=Path(meta["repo"])
+        connection=self._connect()
         try:
-            if self._git_plumbing(work,["rev-parse",candidate_ref]).decode().strip()!=candidate:raise PermissionError("exact candidate approval required")
+            connection.execute("BEGIN IMMEDIATE")
+            row=connection.execute("SELECT resource_json FROM approval_records_versions WHERE task_id=? AND action=? ORDER BY sequence DESC,created_at DESC LIMIT 1",(task_id,action)).fetchone()
+            consumed=connection.execute("SELECT 1 FROM consumed_actions WHERE task_id=? AND action=?",(task_id,action)).fetchone()
+            meta=connection.execute("SELECT * FROM workspace_meta WHERE task_id=?",(task_id,)).fetchone()
+            if row is None or consumed is not None or meta is None:raise PermissionError("exact candidate approval required")
+            resource=json.loads(row[0]); unsigned={key:value for key,value in resource.items() if key not in {"resource_version","requested_at"}}
+            expected_version=hashlib.sha256(json.dumps(unsigned,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+            candidate=resource.get("reviewed_commit"); candidate_ref=resource.get("candidate_ref"); expected_ref=f"refs/triagent/reviewed/{task_id}"
+            if resource.get("resource_version")!=expected_version or resource.get("repo")!=meta["repo"] or resource.get("branch")!=meta["branch"] or resource.get("base_commit")!=meta["base_commit"] or candidate!=meta["reviewed_commit"] or candidate_ref!=meta["candidate_ref"] or candidate_ref!=expected_ref:raise PermissionError("exact candidate approval required")
+            work=self.runs_root/task_id/"worktree"
+            if not work.exists():work=Path(meta["repo"])
+            if self._git_plumbing(work,["rev-parse","--verify",candidate_ref]).decode().strip()!=candidate:raise PermissionError("exact candidate approval required")
             if self._git_plumbing(work,["cat-file","-t",candidate]).decode().strip()!="commit":raise PermissionError("exact candidate approval required")
             current=self.approval_manifest(task_id)
-        except (OSError,subprocess.CalledProcessError,ValueError) as error:raise PermissionError("exact candidate approval required") from error
-        if any(resource.get(key)!=value for key,value in current.items()):raise PermissionError("exact candidate approval required")
-        return candidate
+            if any(resource.get(key)!=value for key,value in current.items()):raise PermissionError("exact candidate approval required")
+            connection.execute("INSERT INTO consumed_actions(task_id,action,resource_json,consumed_at) VALUES(?,?,?,?)",(task_id,action,row[0],datetime.now(UTC).isoformat()))
+            connection.commit();return candidate
+        except (OSError,subprocess.CalledProcessError,ValueError,PermissionError) as error:
+            connection.rollback()
+            if isinstance(error,PermissionError):raise
+            raise PermissionError("exact candidate approval required") from error
+        finally:connection.close()
 
-    def delete_candidate_ref(self,task_id:str)->None:
-        candidate=self.consume_approval(task_id,"prune-branch"); meta=self.workspace(task_id); work=self.runs_root/task_id/"worktree"
+    def delete_candidate_ref(self,task_id:str,candidate:str|None=None)->None:
+        if candidate is None:candidate=self.consume_approval(task_id,"prune-branch")
+        meta=self.workspace(task_id); work=self.runs_root/task_id/"worktree"
         if not work.exists():work=Path(meta["repo"])
         self._git_plumbing(work,["update-ref","-d",meta["candidate_ref"],candidate])
     def approve_requested(self, task_id: str, action: str) -> TaskRuntime:
