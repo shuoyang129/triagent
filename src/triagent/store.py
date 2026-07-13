@@ -213,7 +213,13 @@ class TaskStore:
             runtime = connection.execute("SELECT * FROM task_runtime WHERE task_id=?", (task_id,)).fetchone()
             if task is None or runtime is None: raise KeyError(task_id)
             import time
-            if runtime["lease_owner"] is not None and (runtime["lease_owner"] != lease_owner or runtime["lease_until"] < time.time()):
+            if lease_owner is not None and (
+                runtime["lease_owner"] != lease_owner
+                or runtime["lease_until"] is None
+                or runtime["lease_until"] < time.time()
+            ):
+                raise LeaseConflict("controller lease is not owned")
+            if lease_owner is None and runtime["lease_owner"] is not None:
                 raise LeaseConflict("controller lease is not owned")
             spec = TaskSpec.model_validate_json(task["spec_json"]); now = datetime.now(UTC)
             started = datetime.fromisoformat(runtime["started_at"]) if runtime["started_at"] else now
@@ -290,9 +296,16 @@ class TaskStore:
         with self._connect() as connection: row=connection.execute("SELECT estimated_usd FROM agent_calls WHERE id=? AND task_id=?",(call_id,task_id)).fetchone()
         if row is None: raise StateConflict("call is not pending")
         self._finish_call(task_id,call_id,"interrupted",actual_usd,diagnostic[:200])
-    def execute_paid_operation(self, task_id: str, estimated_usd: float | None, operation):
+    def execute_paid_operation(
+        self,
+        task_id: str,
+        estimated_usd: float | None,
+        operation,
+        *,
+        lease_owner: str | None = None,
+    ):
         if estimated_usd is None or estimated_usd <= 0: raise BudgetExceeded("paid operation requires a positive conservative estimate")
-        call=self.reserve_agent_call(task_id,estimated_usd)
+        call=self.reserve_agent_call(task_id,estimated_usd,lease_owner)
         try: result=operation()
         except BaseException as error:
             self.interrupt_agent_call(task_id,call,type(error).__name__); raise

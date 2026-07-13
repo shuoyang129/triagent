@@ -48,12 +48,16 @@ class Orchestrator:
         verifier: AgentAdapter,
         reviewer: AgentAdapter,
         profile_digest: str | None = None,
+        expected_recovery_checkpoint: tuple[str, int] | None = None,
+        implementer_probe_estimated_usd: float | None = None,
     ) -> None:
         self.store = store
         self.implementer = implementer
         self.verifier = verifier
         self.reviewer = reviewer
         self.profile_digest = profile_digest
+        self.expected_recovery_checkpoint = expected_recovery_checkpoint
+        self.implementer_probe_estimated_usd = implementer_probe_estimated_usd
         self._lease_owner: str | None = None
 
     def _execution_provenance(self) -> dict[str, str]:
@@ -333,6 +337,12 @@ class Orchestrator:
                 or checkpoint["sequence"] < 1
             ):
                 raise ValueError("recovery checkpoint is missing or invalid")
+            current_checkpoint = (checkpoint["stage"], checkpoint["sequence"])
+            if (
+                self.expected_recovery_checkpoint is not None
+                and current_checkpoint != self.expected_recovery_checkpoint
+            ):
+                raise ValueError("recovery checkpoint changed")
             stage = checkpoint["stage"]
             target = {
                 "implement": TaskState.IMPLEMENT,
@@ -356,6 +366,15 @@ class Orchestrator:
             )
             if stage in {"verify", "review"}:
                 self.store.restore_candidate_worktree(task_id)
+            if stage == "implement" and type(self.implementer) is DeepSeekAdapter:
+                capability = self.store.execute_paid_operation(
+                    task_id,
+                    self.implementer_probe_estimated_usd,
+                    self.implementer.capabilities,
+                    lease_owner=owner,
+                )
+                if not capability.available or capability.ready is not True:
+                    raise ValueError("persisted DeepSeek implementer is not ready")
             self.store.accept_recovery(
                 task_id,
                 stage=stage,

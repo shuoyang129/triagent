@@ -5,6 +5,7 @@ import subprocess
 import tomllib
 from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 from triagent.cli import app
@@ -15,6 +16,7 @@ from triagent.adapters.deepseek import DeepSeekAdapter as RealDeepSeekAdapter
 from triagent.adapters.process import ProcessResult
 from triagent.domain import Budget, RiskLevel, StageOutcome, TaskSpec, TaskState
 from triagent.git_workspace import GitWorkspace
+from triagent.orchestrator import Orchestrator
 from triagent.report import REPORT_FIELDS
 from triagent.report import render_report
 from triagent.store import TaskStore
@@ -301,7 +303,18 @@ def test_deepseek_implementation_resume_passes_billed_readiness_and_uses_same_ad
 ) -> None:
     profile = tmp_path / "deepseek.toml"
     store, task = _deepseek_resume_task(tmp_path, profile)
-    deepseek_runner = DeepSeekResumeRunner()
+    lease_states: list[str | None] = []
+
+    class LeaseObservingRunner(DeepSeekResumeRunner):
+        def run(self, argv, cwd, timeout, env_allowlist, stdin=None):
+            with store._connect() as connection:
+                row = connection.execute(
+                    "SELECT lease_owner FROM task_runtime WHERE task_id=?", (task.id,)
+                ).fetchone()
+            lease_states.append(row["lease_owner"])
+            return super().run(argv, cwd, timeout, env_allowlist, stdin)
+
+    deepseek_runner = LeaseObservingRunner()
     monkeypatch.setattr(
         cli_module, "CursorAdapter",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Cursor constructed")),
@@ -335,6 +348,7 @@ def test_deepseek_implementation_resume_passes_billed_readiness_and_uses_same_ad
     assert store.load(task.id).state is TaskState.APPROVAL
     assert deepseek_runner.implementation_calls == 1
     assert store.runtime(task.id).agent_calls == 4
+    assert lease_states and all(owner is not None for owner in lease_states)
 
 
 def test_deepseek_resume_unavailable_readiness_refuses_before_implementation(
@@ -342,6 +356,7 @@ def test_deepseek_resume_unavailable_readiness_refuses_before_implementation(
 ) -> None:
     profile = tmp_path / "deepseek.toml"
     store, task = _deepseek_resume_task(tmp_path, profile)
+    checkpoint = store.recovery_checkpoint(task.id)
     deepseek_runner = DeepSeekResumeRunner(available=False)
     monkeypatch.setattr(
         cli_module, "DeepSeekAdapter",
@@ -359,6 +374,7 @@ def test_deepseek_resume_unavailable_readiness_refuses_before_implementation(
     assert deepseek_runner.implementation_calls == 0
     assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
     assert store.runtime(task.id).repair_attempts == 0
+    assert store.recovery_checkpoint(task.id) == checkpoint
 
 
 def test_deepseek_resume_probe_budget_refuses_without_probe_or_implementation(
@@ -366,6 +382,7 @@ def test_deepseek_resume_probe_budget_refuses_without_probe_or_implementation(
 ) -> None:
     profile = tmp_path / "deepseek.toml"
     store, task = _deepseek_resume_task(tmp_path, profile, max_usd=.1)
+    checkpoint = store.recovery_checkpoint(task.id)
     deepseek_runner = DeepSeekResumeRunner()
     monkeypatch.setattr(
         cli_module, "DeepSeekAdapter",
@@ -383,6 +400,41 @@ def test_deepseek_resume_probe_budget_refuses_without_probe_or_implementation(
     assert deepseek_runner.calls == []
     assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
     assert store.runtime(task.id).repair_attempts == 0
+    assert store.recovery_checkpoint(task.id) == checkpoint
+
+
+def test_stale_same_stage_deepseek_resume_loser_makes_no_paid_probe(tmp_path: Path) -> None:
+    profile = tmp_path / "deepseek.toml"
+    store, task = _deepseek_resume_task(tmp_path, profile)
+    expected = store.recovery_checkpoint(task.id)
+    deepseek_runner = DeepSeekResumeRunner()
+    config = tomllib.loads(profile.read_text(encoding="utf-8"))
+    orchestrator = Orchestrator(
+        store,
+        RealDeepSeekAdapter(
+            runner=deepseek_runner, probe_dir=tmp_path, command=["deepseek"],
+            enabled=True, billing_confirmed=True, live_confirmed=True, estimated_usd=.2,
+        ),
+        RealCodexAdapter(runner=ResumeStageRunner("verify"), command=["codex"], estimated_usd=.1),
+        RealAntigravityAdapter(
+            runner=ResumeStageRunner("review"), command=["review"], estimated_usd=.1,
+            acl_verifier=lambda d, f: True,
+        ),
+        profile_digest=cli_module._profile_digest(config),
+        expected_recovery_checkpoint=(expected["stage"], expected["sequence"]),
+        implementer_probe_estimated_usd=.2,
+    )
+    store.transition_recoverable(
+        task.id, TaskState.FAILED_RECOVERABLE, "implement", "newer-same-stage-failure"
+    )
+
+    with pytest.raises(ValueError, match="checkpoint changed"):
+        orchestrator.resume_until_blocked(task.id)
+
+    assert deepseek_runner.calls == []
+    assert store.runtime(task.id).agent_calls == 0
+    assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
+    assert store.recovery_checkpoint(task.id)["sequence"] > expected["sequence"]
 
 
 def test_resume_cli_real_profile_requires_gates_and_available_configuration(tmp_path: Path) -> None:

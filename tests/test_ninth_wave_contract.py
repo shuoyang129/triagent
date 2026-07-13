@@ -18,7 +18,7 @@ from triagent.adapters.process import ProcessResult
 from triagent.domain import Budget, RiskLevel, StageOutcome, TaskSpec, TaskState
 from triagent.git_workspace import GitWorkspace
 from triagent.orchestrator import Orchestrator
-from triagent.store import BudgetExceeded, StateConflict, TaskStore
+from triagent.store import BudgetExceeded, LeaseConflict, StateConflict, TaskStore
 
 
 def _png_chunk(kind:bytes,payload:bytes)->bytes:
@@ -323,6 +323,27 @@ def test_accept_recovery_rejects_a_replaced_same_stage_checkpoint(tmp_path):
 
     assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
     assert store.recovery_checkpoint(task.id)["sequence"] > first_sequence
+
+
+def test_paid_operation_requires_the_current_lease_owner(tmp_path):
+    store = TaskStore(tmp_path)
+    task = store.create_task(TaskSpec(
+        goal="x", scope=[str(tmp_path)], acceptance=["x"],
+        budget=Budget(max_agent_calls=2, max_minutes=60, max_usd=1),
+    ))
+    store.acquire_lease(task.id, "winner", 60)
+    probes: list[str] = []
+
+    with pytest.raises(LeaseConflict, match="lease"):
+        store.execute_paid_operation(
+            task.id, .1, lambda: probes.append("loser"), lease_owner="loser"
+        )
+
+    assert probes == []
+    assert store.execute_paid_operation(
+        task.id, .1, lambda: probes.append("winner"), lease_owner="winner"
+    ) is None
+    assert probes == ["winner"]
 
 
 def test_candidate_exists_before_verify_and_reviewer_mutations_never_enter_it(tmp_path):
