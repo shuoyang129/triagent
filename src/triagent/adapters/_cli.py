@@ -72,10 +72,13 @@ def read_prompt(request) -> tuple[str | None, AgentResult | None]:
             properties["findings"]={"type":"array","maxItems":50,"items":{"type":"object","additionalProperties":False,"required":["severity","code","message"],"properties":{"severity":{"type":"string","enum":["BLOCKER","MAJOR","MINOR","NOTE"]},"code":{"type":"string","minLength":1,"maxLength":100},"message":{"type":"string","minLength":1,"maxLength":500}}}}
             required.append("findings")
         schema=json.dumps({"type":"object","additionalProperties":False,"required":required,"properties":properties},sort_keys=True,separators=(",",":"))
+        authoritative_workdir=json.dumps(str(request.workdir.resolve()),ensure_ascii=False)
         header=(
             "TRIAGENT_CONTROLLER_PROMPT_V2\n"
             f"IMMUTABLE_ROLE={role.value}\n"
             f"REQUIRED_OPERATION={operation}\n"
+            f"AUTHORITATIVE_WORKDIR_JSON={authoritative_workdir}\n"
+            "WORKDIR_RULE=Run every repository inspection, test, and tool call in AUTHORITATIVE_WORKDIR_JSON; TASK scope paths describe the source repository and must not replace this workdir.\n"
             "SAFETY_BOUNDARY=Work only inside the supplied task and workdir; do not expand scope, reveal secrets, or perform approval-gated actions.\n"
             f"OUTPUT_SCHEMA_ID={request.output_schema}\n"
             "OUTPUT_RULE=Return exactly one JSON object matching OUTPUT_SCHEMA_JSON with no prose or markdown.\n"

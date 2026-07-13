@@ -50,6 +50,7 @@ def test_real_adapter_runner_receives_exact_task_and_handoff_bytes(tmp_path,adap
     adapter.run(req)
     actual=runner.inputs[0]
     assert actual.startswith(b"TRIAGENT_CONTROLLER_PROMPT_V2\n")
+    assert f"AUTHORITATIVE_WORKDIR_JSON={json.dumps(str(tmp_path.resolve()))}".encode() in actual
     assert actual.endswith(b'TASK\n{"goal":"exact"}\nHANDOFF\n'+handoff.read_bytes())
     assert all(not path.exists() for path in runner.paths)
     assert actual.decode() not in " ".join(runner.calls[0])
