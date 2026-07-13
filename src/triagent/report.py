@@ -54,7 +54,7 @@ def render_persisted_report(store: TaskStore, task_id: str) -> str:
         "tests": f"{verify.summary}: {', '.join(verify.evidence)}" if verify and verify.evidence else (verify.summary if verify else "unknown/missing"),
         "independent review": f"{review.summary}: {', '.join(review.evidence)}" if review and review.evidence else (review.summary if review else "unknown/missing"),
         "visual artifacts": ", ".join(review.artifacts) if review and review.artifacts else "unknown/missing",
-        "residual risk": "unknown/missing",
+        "residual risk": ", ".join(f"{f.severity}:{f.code}" for f in review.findings) if review and review.findings else "none recorded",
         "rollback": next((o.rollback for o in outcomes.values() if o.rollback != "unknown/missing"), "unknown/missing"),
         "pending approval": pending,
     }

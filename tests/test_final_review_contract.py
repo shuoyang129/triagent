@@ -48,7 +48,8 @@ def test_atomic_budget_reservation_accounts_interrupted_and_unknown_cost(tmp_pat
 
 def test_concurrent_approval_updates_are_preserved_and_lease_is_single_writer(tmp_path):
     store = TaskStore(tmp_path); task = store.create_task(TaskSpec(goal="x", scope=["x"], acceptance=["x"]))
-    threads = [threading.Thread(target=store.record_approval, args=(task.id, action))
+    for action in ("outcome","merge"): store.request_approval(task.id,action,{"version":action})
+    threads = [threading.Thread(target=store.approve_requested, args=(task.id, action))
                for action in ("outcome", "merge")]
     [t.start() for t in threads]; [t.join() for t in threads]
     assert store.runtime(task.id).approvals == frozenset({"outcome", "merge"})

@@ -25,12 +25,6 @@ app = typer.Typer(no_args_is_help=True, help="Run and inspect TriAgent tasks.")
 DataRoot = Annotated[Path, typer.Option(help="TriAgent state directory.")]
 
 
-class _FakeImplementer(FakeAgent):
-    def run(self, request: AgentRequest) -> AgentResult:
-        (request.workdir / "health-endpoint.txt").write_text("ok\n", encoding="utf-8")
-        return super().run(request)
-
-
 def _root(value: Path | None) -> Path:
     return value or Path(os.environ.get("TRIAGENT_HOME", ".triagent"))
 
@@ -77,13 +71,14 @@ def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake",
     store = TaskStore(_root(data_root)); task = store.create_task(_spec(repo, goal, budget))
     run_worktree = store.runs_root / task.id / "worktree"
     try:
-        if profile != "fake": store.record_approval(task.id,"live"); store.record_approval(task.id,"billing")
+        if profile != "fake": store.record_attestation(task.id,"live-confirmed",True); store.record_attestation(task.id,"billing-confirmed",True)
         run_worktree.rmdir()
         workspace=GitWorkspace.create(repo, task.id, destination=run_worktree)
         store.set_workspace(task.id,str(workspace.repo),workspace.base_commit,f"triagent/{task.id}")
         if profile == "fake":
             success = AgentResult(status=AgentStatus.SUCCEEDED, data={"status":"passed","summary_code":"completed","evidence":[]})
-            orchestrator = Orchestrator(store, _FakeImplementer([success]), FakeAgent([success]), FakeAgent([success]))
+            (run_worktree/"health-endpoint.txt").write_text("ok\n",encoding="utf-8")
+            orchestrator = Orchestrator(store, FakeAgent([success]), FakeAgent([success]), FakeAgent([success]))
         else:
             assert config is not None
             cursor = CursorAdapter(command=_profile_command(config, "cursor"), deepseek_billing_confirmed=False, estimated_usd=_priced(config,"cursor"))
@@ -93,13 +88,8 @@ def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake",
             capabilities={"cursor":cursor_caps,"deepseek":False}
             if not cursor_caps.available:
                 probe_cost=_priced(config,"opencode","probe_estimated_usd")
-                call=store.reserve_agent_call(task.id,probe_cost)
                 deepseek=DeepSeekAdapter(command=_profile_command(config,"opencode"),enabled=True,billing_confirmed=True,live_confirmed=True,estimated_usd=_priced(config,"opencode"))
-                try:
-                    deepseek_caps=deepseek.capabilities()
-                except BaseException as error:
-                    store.interrupt_agent_call(task.id,call,type(error).__name__); raise
-                else: store.complete_agent_call(task.id,call,probe_cost or 0.0)
+                deepseek_caps=store.execute_paid_operation(task.id,probe_cost,deepseek.capabilities)
                 capabilities["deepseek"]=deepseek_caps
             choice = ImplementationRouter().choose(cursor_usage=0.0, capabilities=capabilities)
             orchestrator = Orchestrator(store, cursor if choice.name == "cursor" else deepseek, codex, antigravity)

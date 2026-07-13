@@ -14,9 +14,11 @@ from triagent.adapters.fake import FakeAgent
 from triagent.orchestrator import Orchestrator
 
 class Runner:
-    def __init__(self,result=None): self.calls=[]; self.result=result
+    def __init__(self,result=None): self.calls=[]; self.inputs=[]; self.paths=[]; self.result=result
     def run(self,argv,cwd,timeout,env):
         self.calls.append(list(argv))
+        if "--input-file" in argv:
+            path=Path(argv[argv.index("--input-file")+1]); self.paths.append(path); self.inputs.append(path.read_bytes())
         if isinstance(self.result,BaseException): raise self.result
         return self.result
 
@@ -36,17 +38,18 @@ def test_deepseek_capability_without_live_confirmation_calls_no_runner(tmp_path)
     assert not caps.available and runner.calls == []
 
 @pytest.mark.parametrize("adapter_cls,output",[
-    (CodexAdapter,'{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}'),
-    (AntigravityAdapter,'{"summary":"ok","actual_usd":0.1}')])
+    (CodexAdapter,json.dumps({"type":"item.completed","item":{"type":"agent_message","text":json.dumps({"status":"passed"})}})),
+    (AntigravityAdapter,json.dumps({"status":"passed","findings":[],"actual_usd":0.1}))])
 def test_real_adapter_runner_receives_exact_task_and_handoff_bytes(tmp_path,adapter_cls,output):
     task=tmp_path/"task.json"; task.write_bytes(b'{"goal":"exact"}')
-    handoff=tmp_path/"handoff.json"; handoff.write_bytes(b'{"final_diff":"+exact"}')
+    handoff=tmp_path/"handoff.json"; handoff.write_bytes(json.dumps({"final_diff":"+exact"*20000}).encode())
     runner=Runner(ProcessResult(0,output,"",False)); adapter=adapter_cls(runner=runner)
     role=AgentRole.VERIFIER if adapter_cls is CodexAdapter else AgentRole.REVIEWER
     req=AgentRequest(role=role,agent_identity=adapter.identity,task_file=task,handoff_file=handoff,workdir=tmp_path,output_schema="x",timeout_seconds=5)
     adapter.run(req)
-    expected='TRIAGENT_INPUT_V1\nTASK\n{"goal":"exact"}\nHANDOFF\n{"final_diff":"+exact"}'
-    assert runner.calls[0][-1] == expected
+    expected=b'TRIAGENT_INPUT_V1\nTASK\n{"goal":"exact"}\nHANDOFF\n'+handoff.read_bytes()
+    assert runner.inputs[0] == expected and all(not path.exists() for path in runner.paths)
+    assert expected.decode() not in " ".join(runner.calls[0])
 
 def test_adapter_instance_cannot_be_relabeled():
     adapter=CodexAdapter(runner=Runner())

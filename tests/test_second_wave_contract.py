@@ -32,15 +32,15 @@ def test_actual_cost_cannot_exceed_conservative_reservation(tmp_path):
     call=store.reserve_agent_call(task.id, 1)
     with pytest.raises(BudgetExceeded): store.complete_agent_call(task.id, call, 1.01)
 
-def test_orchestrator_reconciles_adapter_actual_cost(tmp_path):
+def test_untrusted_fake_subclass_cannot_enter_paid_orchestration(tmp_path):
     class Paid(FakeAgent):
         identity="paid"; allowed_roles=frozenset({AgentRole.IMPLEMENTER})
         def estimate_cost(self, request): return CostEstimate(1.0)
     store=TaskStore(tmp_path); task=store.create_task(spec(budget=Budget(max_usd=2)))
     paid=Paid([AgentResult(status=AgentStatus.SUCCEEDED,actual_usd=.4,data={"status":"passed","summary_code":"done"})])
     orchestrator=Orchestrator(store,paid,FakeAgent.succeeding(),FakeAgent.succeeding())
-    orchestrator.advance(task.id); orchestrator.advance(task.id)
-    assert store.runtime(task.id).usd_spent == pytest.approx(.4)
+    orchestrator.advance(task.id)
+    with pytest.raises(ValueError,match="untrusted adapter"): orchestrator.advance(task.id)
 
 
 def test_deepseek_cannot_be_activated_by_constructor_boolean(tmp_path):
@@ -144,10 +144,8 @@ max_usd=5
     monkeypatch.setattr(cli_module,"CodexAdapter",lambda *a,**k: CodexStub())
     monkeypatch.setattr(cli_module,"AntigravityAdapter",lambda *a,**k: AntigravityStub())
     result=CliRunner().invoke(cli_module.app,["run","--profile",str(profile),"--live-confirmed","--billing-confirmed","--data-root",str(tmp_path/"data"),str(repo),"x"])
-    assert result.exit_code == 0, result.output
+    assert result.exit_code != 0 and "task setup failed" in result.output
     assert order[:2] == ["cursor","deepseek"]
-    task_id=result.output.split("Task: ",1)[1].splitlines()[0]
-    assert TaskStore(tmp_path/"data").runtime(task_id).usd_spent >= .25
 
 
 def test_pruning_uses_durable_task_approval(tmp_path):
@@ -161,4 +159,4 @@ def test_pruning_uses_durable_task_approval(tmp_path):
     # Approval is bound to the workspace identifier; use a store task with that exact id contract.
     with store._connect() as c:
         c.execute("UPDATE tasks SET id=? WHERE id=?",(ws.task_id,task.id)); c.execute("UPDATE task_runtime SET task_id=? WHERE task_id=?",(ws.task_id,task.id))
-    store.record_approval(ws.task_id,"prune-branch",bound); ws.prune_branch(store=store, task_id=ws.task_id)
+    store.request_approval(ws.task_id,"prune-branch",bound); store.approve_requested(ws.task_id,"prune-branch"); ws.prune_branch(store=store, task_id=ws.task_id)

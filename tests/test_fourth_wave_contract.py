@@ -12,8 +12,13 @@ from triagent.orchestrator import Orchestrator
 from triagent.store import BudgetExceeded,TaskStore
 
 class Runner:
-    def __init__(self,*outputs): self.outputs=list(outputs); self.calls=[]
-    def run(self,argv,cwd,timeout,env): self.calls.append(list(argv)); return self.outputs.pop(0)
+    def __init__(self,*outputs): self.outputs=list(outputs); self.calls=[]; self.inputs=[]
+    def run(self,argv,cwd,timeout,env):
+        self.calls.append(list(argv))
+        if "--input-file" in argv:
+            raw=argv[argv.index("--input-file")+1]; match=__import__('re').fullmatch(r"/mnt/([a-zA-Z])(/.*)",raw)
+            path=Path(f"{match.group(1).upper()}:{match.group(2)}" if match else raw); self.inputs.append(path.read_bytes())
+        return self.outputs.pop(0)
 
 def init_repo(path:Path):
     path.mkdir(); subprocess.run(["git","init","-q"],cwd=path,check=True); subprocess.run(["git","config","user.email","x@y"],cwd=path,check=True); subprocess.run(["git","config","user.name","x"],cwd=path,check=True)
@@ -32,7 +37,7 @@ def test_actual_real_adapter_parsers_orchestrate_to_approval(tmp_path):
     assert orchestrator.run_until_blocked(task.id) is TaskState.APPROVAL
     assert store.runtime(task.id).usd_spent == pytest.approx(.8)  # .2 + conservative .5 unknown + .1
     assert store.outstanding_approvals(task.id)==["merge","outcome"]
-    assert "HANDOFF\n" in codex_runner.calls[0][-1] and "HANDOFF\n" in agy_runner.calls[0][-1]
+    assert b"HANDOFF\n" in codex_runner.inputs[0] and b"HANDOFF\n" in agy_runner.inputs[0]
 
 def test_pending_reservations_cannot_oversubscribe(tmp_path):
     store=TaskStore(tmp_path); task=store.create_task(TaskSpec(goal="x",scope=["x"],acceptance=["x"],budget=Budget(max_usd=1)))

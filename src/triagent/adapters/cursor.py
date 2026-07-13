@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pydantic import ConfigDict
 
-from triagent.adapters._cli import filesystem_probe, invoke_json, probe, read_prompt, runtime
+from triagent.adapters._cli import filesystem_probe, invoke_json, probe, restricted_input, runtime
 from triagent.adapters.base import AgentAdapter, AgentCapabilities, AgentRequest, AgentResult, AgentRole, CostEstimate
 from triagent.adapters.process import ProcessRunner
 
@@ -68,8 +68,6 @@ class CursorAdapter(AgentAdapter):
         return CursorCapabilities(available=ready, installed=installed, version=version or None, authenticated=authenticated, headless=installed, ready=ready, deepseek_model_listed=model_listed, deepseek_agent_smoke_test=smoke, deepseek_billing_confirmed=self._billing, deepseek_byok_available=byok)
 
     def run(self, request: AgentRequest) -> AgentResult:
-        prompt, error = read_prompt(request)
-        if error:
-            return error
-        assert prompt is not None
-        return invoke_json(self._runner, self._command("--print", "--json", prompt), request.workdir, request.timeout_seconds, self._env, self._secrets, request.role)
+        with restricted_input(request) as (path,error):
+            if error:return error
+            return invoke_json(self._runner,self._command("--print","--json","--input-file",self._wsl_path(path)),request.workdir,request.timeout_seconds,self._env,self._secrets,request.role)

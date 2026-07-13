@@ -16,7 +16,7 @@ from triagent.adapters.fake import FakeAgent
 
 _TRUSTED={CursorAdapter:("cursor",frozenset({AgentRole.IMPLEMENTER})),CodexAdapter:("codex",frozenset({AgentRole.VERIFIER})),AntigravityAdapter:("antigravity",frozenset({AgentRole.REVIEWER})),DeepSeekAdapter:("deepseek",frozenset({AgentRole.IMPLEMENTER}))}
 def _contract(adapter):
-    if isinstance(adapter,FakeAgent): return "fake",frozenset({AgentRole.IMPLEMENTER,AgentRole.VERIFIER,AgentRole.REVIEWER})
+    if type(adapter) is FakeAgent: return "fake",frozenset({AgentRole.IMPLEMENTER,AgentRole.VERIFIER,AgentRole.REVIEWER})
     try: return _TRUSTED[type(adapter)]
     except KeyError as error: raise ValueError("untrusted adapter concrete type") from error
 
@@ -92,7 +92,7 @@ class Orchestrator:
 
     def _write_handoff(self, task_id: str, *, tests: list[str] | None = None) -> Path:
         task=self.store.load(task_id); run=self.store.runs_root/task_id; work=run/"worktree"; meta=self.store.workspace(task_id)
-        if meta is None and all(isinstance(a,FakeAgent) for a in (self.implementer,self.verifier,self.reviewer)):
+        if meta is None and all(type(a) is FakeAgent for a in (self.implementer,self.verifier,self.reviewer)):
             diff=""
         else:
           try:

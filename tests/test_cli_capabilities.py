@@ -153,9 +153,9 @@ def test_codex_runs_noninteractively_and_parses_jsonl_event_stream(agent_request
     argv = runner.calls[0][0]
     assert argv[:4] == ["codex.exe", "exec", "--sandbox", "read-only"]
     assert "--json" in argv
-    assert result.status is AgentStatus.SUCCEEDED
-    assert result.summary == ""
-    assert result.data == {"status":"passed","summary_code":"completed","evidence":[],"artifacts":[]}
+    assert result.status is AgentStatus.INVALID_OUTPUT
+    assert result.summary == "CLI returned non-JSON canonical output"
+    assert result.data == {}
     assert "unknown-secret" not in result.model_dump_json()
 
 
@@ -166,12 +166,12 @@ def test_codex_jsonl_rejects_malformed_or_no_message_stream(agent_request: Agent
 
 
 def test_cursor_uses_wsl_argv_and_does_not_interpolate_prompt(agent_request: AgentRequest) -> None:
-    runner = FakeRunner(completed('{"summary":"ok"}'))
+    runner = FakeRunner(completed('{"status":"passed"}'))
     result = CursorAdapter(runner=runner).run(agent_request)
     argv = runner.calls[0][0]
-    prompt = agent_request.task_file.read_text(encoding="utf-8")
     assert argv[:5] == ["wsl.exe", "--distribution", "Ubuntu-24.04", "--exec", "bash"]
-    assert argv[-1] == f"TRIAGENT_INPUT_V1\nTASK\n{prompt}\nHANDOFF\n"
+    assert "--input-file" in argv
+    assert "$(touch nope)" not in " ".join(argv)
     assert "$(touch nope)" not in argv[6]
     assert result.status is AgentStatus.SUCCEEDED
 
@@ -224,7 +224,7 @@ def test_sentinel_unlink_failure_forces_smoke_false(tmp_path: Path, monkeypatch:
 
 
 def test_antigravity_print_mode_never_skips_permissions(agent_request: AgentRequest) -> None:
-    runner = FakeRunner(completed('{"summary":"ok"}'))
+    runner = FakeRunner(completed('{"status":"passed"}'))
     result = AntigravityAdapter(runner=runner).run(agent_request)
     argv = runner.calls[0][0]
     assert argv[:2] == ["agy.exe", "--print"]

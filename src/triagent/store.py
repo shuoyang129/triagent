@@ -93,6 +93,9 @@ class TaskStore:
             connection.execute("CREATE TABLE IF NOT EXISTS workspace_meta(task_id TEXT PRIMARY KEY, repo TEXT NOT NULL, base_commit TEXT NOT NULL, branch TEXT NOT NULL)")
             connection.execute("CREATE TABLE IF NOT EXISTS approval_records(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action))")
             connection.execute("CREATE TABLE IF NOT EXISTS approval_requests(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action))")
+            connection.execute("CREATE TABLE IF NOT EXISTS approval_records_versions(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action,resource_json))")
+            connection.execute("CREATE TABLE IF NOT EXISTS approval_requests_versions(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action,resource_json))")
+            connection.execute("CREATE TABLE IF NOT EXISTS system_attestations(task_id TEXT NOT NULL, name TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(task_id,name))")
 
     def create_task(self, spec: TaskSpec) -> StoredTask:
         task_id = str(uuid.uuid4())
@@ -122,7 +125,7 @@ class TaskStore:
             ).fetchone()
         if row is None:
             raise KeyError(task_id)
-        with self._connect() as connection: approvals=frozenset(r[0] for r in connection.execute("SELECT action FROM approval_records WHERE task_id=?",(task_id,)).fetchall())
+        with self._connect() as connection: approvals=frozenset(r[0] for r in connection.execute("SELECT DISTINCT action FROM approval_records_versions WHERE task_id=?",(task_id,)).fetchall())
         return TaskRuntime(row["agent_calls"], row["repair_attempts"], approvals, row["completed_calls"], row["interrupted_calls"], row["usd_spent"], row["started_at"])
 
     def reserve_agent_call(self, task_id: str, estimated_usd: float | None = None, lease_owner: str | None = None) -> str:
@@ -166,6 +169,14 @@ class TaskStore:
         with self._connect() as connection: row=connection.execute("SELECT estimated_usd FROM agent_calls WHERE id=? AND task_id=?",(call_id,task_id)).fetchone()
         if row is None: raise StateConflict("call is not pending")
         self._finish_call(task_id,call_id,"interrupted",actual_usd,diagnostic[:200])
+    def execute_paid_operation(self, task_id: str, estimated_usd: float | None, operation):
+        if estimated_usd is None or estimated_usd <= 0: raise BudgetExceeded("paid operation requires a positive conservative estimate")
+        call=self.reserve_agent_call(task_id,estimated_usd)
+        try: result=operation()
+        except BaseException as error:
+            self.interrupt_agent_call(task_id,call,type(error).__name__); raise
+        self.complete_agent_call(task_id,call,estimated_usd)
+        return result
 
     def finalize_overrun_and_pause(self, task_id: str, call_id: str, actual_usd: float, expected: TaskState) -> None:
         now=datetime.now(UTC).isoformat(); connection=self._connect()
@@ -220,12 +231,15 @@ class TaskStore:
         try:
             connection.execute("BEGIN IMMEDIATE")
             row=connection.execute("SELECT state FROM tasks WHERE id=?", (task_id,)).fetchone()
-            runtime=connection.execute("SELECT approvals_json FROM task_runtime WHERE task_id=?", (task_id,)).fetchone(); request=connection.execute("SELECT resource_json FROM approval_requests WHERE task_id=? AND action=?",(task_id,action)).fetchone()
+            runtime=connection.execute("SELECT approvals_json FROM task_runtime WHERE task_id=?", (task_id,)).fetchone(); request=connection.execute("SELECT resource_json FROM approval_requests_versions WHERE task_id=? AND action=? ORDER BY resource_json DESC LIMIT 1",(task_id,action)).fetchone()
             if row is None or runtime is None or request is None: raise KeyError(task_id)
             if row["state"] != expected.value: raise StateConflict("approval state changed")
             approvals=sorted(set(json.loads(runtime[0]))|{action})
             connection.execute("UPDATE task_runtime SET approvals_json=? WHERE task_id=?", (json.dumps(approvals),task_id))
-            connection.execute("INSERT INTO approval_records VALUES(?,?,?)",(task_id,action,request[0]))
+            connection.execute("INSERT INTO approval_records_versions VALUES(?,?,?)",(task_id,action,request[0]))
+            meta=connection.execute("SELECT * FROM workspace_meta WHERE task_id=?",(task_id,)).fetchone()
+            version={"task_id":task_id,"base_commit":meta["base_commit"] if meta else "fake","branch":meta["branch"] if meta else "fake"}
+            for pending in ("outcome","merge"): connection.execute("INSERT OR REPLACE INTO approval_requests_versions VALUES(?,?,?)",(task_id,pending,json.dumps(version,sort_keys=True)))
             connection.execute("UPDATE tasks SET state=?,updated_at=? WHERE id=?", (target.value,timestamp,task_id)); connection.commit()
         except Exception: connection.rollback(); raise
         finally: connection.close()
@@ -252,32 +266,28 @@ class TaskStore:
         return self.runtime(task_id)
 
     def record_approval(self, task_id: str, approval: str, resource: dict[str,str] | None = None) -> TaskRuntime:
-        with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            row=connection.execute("SELECT approvals_json FROM task_runtime WHERE task_id=?", (task_id,)).fetchone()
-            if row is None: raise KeyError(task_id)
-            approvals=sorted(set(json.loads(row[0])) | {approval})
-            connection.execute("UPDATE task_runtime SET approvals_json=? WHERE task_id=?", (json.dumps(approvals), task_id))
-            connection.execute("INSERT OR REPLACE INTO approval_records VALUES(?,?,?)",(task_id,approval,json.dumps(resource or {},sort_keys=True)))
-        return self.runtime(task_id)
+        raise PermissionError("operator approvals require an exact outstanding request")
+    def record_attestation(self, task_id: str, name: str, value: bool) -> None:
+        if name not in {"live-confirmed","billing-confirmed"}: raise ValueError("unknown system attestation")
+        with self._connect() as connection: connection.execute("INSERT OR REPLACE INTO system_attestations VALUES(?,?,?)",(task_id,name,int(value)))
 
     def approval_resource(self, task_id: str, action: str) -> dict[str,str] | None:
-        with self._connect() as connection: row=connection.execute("SELECT resource_json FROM approval_records WHERE task_id=? AND action=?",(task_id,action)).fetchone()
+        with self._connect() as connection: row=connection.execute("SELECT resource_json FROM approval_records_versions WHERE task_id=? AND action=? ORDER BY resource_json DESC LIMIT 1",(task_id,action)).fetchone()
         return json.loads(row[0]) if row else None
     def approve_requested(self, task_id: str, action: str) -> TaskRuntime:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            request=connection.execute("SELECT resource_json FROM approval_requests WHERE task_id=? AND action=?",(task_id,action)).fetchone()
-            if request is None or connection.execute("SELECT 1 FROM approval_records WHERE task_id=? AND action=? AND resource_json=?",(task_id,action,request[0])).fetchone(): raise ValueError("no matching outstanding approval request")
-            connection.execute("INSERT INTO approval_records VALUES(?,?,?)",(task_id,action,request[0]))
-            actions=[r[0] for r in connection.execute("SELECT action FROM approval_records WHERE task_id=? ORDER BY action",(task_id,)).fetchall()]
+            request=connection.execute("SELECT resource_json FROM approval_requests_versions r WHERE task_id=? AND action=? AND NOT EXISTS(SELECT 1 FROM approval_records_versions a WHERE a.task_id=r.task_id AND a.action=r.action AND a.resource_json=r.resource_json) ORDER BY resource_json LIMIT 1",(task_id,action)).fetchone()
+            if request is None: raise ValueError("no matching outstanding approval request")
+            connection.execute("INSERT INTO approval_records_versions VALUES(?,?,?)",(task_id,action,request[0]))
+            actions=[r[0] for r in connection.execute("SELECT DISTINCT action FROM approval_records_versions WHERE task_id=? ORDER BY action",(task_id,)).fetchall()]
             connection.execute("UPDATE task_runtime SET approvals_json=? WHERE task_id=?",(json.dumps(actions),task_id))
         return self.runtime(task_id)
     def request_approval(self, task_id: str, action: str, resource: dict[str,str] | None = None) -> None:
-        with self._connect() as connection: connection.execute("INSERT OR REPLACE INTO approval_requests VALUES(?,?,?)",(task_id,action,json.dumps(resource or {},sort_keys=True)))
+        with self._connect() as connection: connection.execute("INSERT OR REPLACE INTO approval_requests_versions VALUES(?,?,?)",(task_id,action,json.dumps(resource or {},sort_keys=True)))
     def outstanding_approvals(self, task_id: str) -> list[str]:
         with self._connect() as connection:
-            rows=connection.execute("SELECT r.action FROM approval_requests r LEFT JOIN approval_records a ON a.task_id=r.task_id AND a.action=r.action AND a.resource_json=r.resource_json WHERE r.task_id=? AND a.action IS NULL ORDER BY r.action",(task_id,)).fetchall()
+            rows=connection.execute("SELECT r.action FROM approval_requests_versions r LEFT JOIN approval_records_versions a ON a.task_id=r.task_id AND a.action=r.action AND a.resource_json=r.resource_json WHERE r.task_id=? AND a.action IS NULL ORDER BY r.action",(task_id,)).fetchall()
         return [r[0] for r in rows]
 
     def transition(

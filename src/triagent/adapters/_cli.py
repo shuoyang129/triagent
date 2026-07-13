@@ -4,10 +4,14 @@ import json
 import os
 import re
 import uuid
+import stat
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Mapping, Sequence
 
 from triagent.adapters.base import AgentResult, AgentStatus, AgentRole
+from pydantic import BaseModel,ConfigDict,Field,StrictStr,ValidationError
+from typing import Literal
 from triagent.adapters.process import ProcessRunner
 
 REDACTED = "[REDACTED]"
@@ -52,6 +56,31 @@ def read_prompt(request) -> tuple[str | None, AgentResult | None]:
         return payload.decode("utf-8"), None
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
         return None, AgentResult(status=AgentStatus.FAILED, summary="Unable to read task file")
+
+@contextmanager
+def restricted_input(request):
+    payload,error=read_prompt(request)
+    if error: yield None,error; return
+    path=request.workdir/f".triagent-input-{uuid.uuid4().hex}.txt"
+    try:
+        path.write_bytes(payload.encode("utf-8")); path.chmod(stat.S_IRUSR|stat.S_IWUSR)
+        yield path,None
+    finally:
+        path.unlink(missing_ok=True)
+
+class FindingPayload(BaseModel):
+    model_config=ConfigDict(extra="forbid",strict=True)
+    severity: Literal["BLOCKER","MAJOR","MINOR","NOTE"]
+    code: StrictStr=Field(min_length=1,max_length=100)
+    message: StrictStr=Field(min_length=1,max_length=500)
+class CanonicalPayload(BaseModel):
+    model_config=ConfigDict(extra="forbid",strict=True)
+    status: Literal["passed","failed"]
+    evidence:list[StrictStr]=Field(default_factory=list,max_length=50)
+    artifacts:list[StrictStr]=Field(default_factory=list,max_length=50)
+    actual_usd:float|None=Field(default=None,ge=0)
+class ReviewPayload(CanonicalPayload):
+    findings:list[FindingPayload]=Field(default_factory=list,max_length=50)
 
 
 def filesystem_probe(
@@ -126,19 +155,17 @@ def invoke_codex_jsonl(
     message = sanitize(messages[-1], secret_values)
     assert isinstance(message, str)
     try: payload=json.loads(message)
-    except json.JSONDecodeError: payload={"status":"passed"}
+    except json.JSONDecodeError: return AgentResult(status=AgentStatus.INVALID_OUTPUT,summary="CLI returned non-JSON canonical output")
     try: data=_canonical(role,payload)
     except ValueError: return AgentResult(status=AgentStatus.INVALID_OUTPUT,summary="CLI returned invalid canonical output")
-    return AgentResult(status=AgentStatus.SUCCEEDED, data=data)
+    actual=payload.get("actual_usd") if isinstance(payload.get("actual_usd"),(int,float)) else None
+    return AgentResult(status=AgentStatus.SUCCEEDED, data=data,actual_usd=actual)
 
 def _canonical(role: AgentRole, payload: dict) -> dict:
-    status=payload.get("status","passed")
-    evidence=payload.get("evidence",[]); artifacts=payload.get("artifacts",[])
-    if status not in {"passed","failed"} or not isinstance(evidence,list) or not all(isinstance(x,str) for x in evidence) or not isinstance(artifacts,list) or not all(isinstance(x,str) for x in artifacts): raise ValueError
-    data={"status":status,"summary_code":{AgentRole.IMPLEMENTER:"completed",AgentRole.VERIFIER:"verified",AgentRole.REVIEWER:"clean"}[role],"evidence":evidence,"artifacts":artifacts}
-    if role is AgentRole.REVIEWER:
-        if not isinstance(payload.get("findings",[]),list): raise ValueError
-        data["findings"]=payload.get("findings",[])
+    try: parsed=(ReviewPayload if role is AgentRole.REVIEWER else CanonicalPayload).model_validate(payload)
+    except ValidationError as error: raise ValueError from error
+    data={"status":parsed.status,"summary_code":{AgentRole.IMPLEMENTER:"completed",AgentRole.VERIFIER:"verified",AgentRole.REVIEWER:"clean"}[role],"evidence":parsed.evidence,"artifacts":parsed.artifacts}
+    if role is AgentRole.REVIEWER: data["findings"]=[x.model_dump() for x in parsed.findings]
     return data
 
 
