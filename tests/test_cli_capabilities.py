@@ -118,7 +118,7 @@ def test_result_recursively_redacts_secret_values_and_keys(agent_request: AgentR
     result = AntigravityAdapter(runner=FakeRunner(completed(json.dumps(payload))), secret_values=[secret]).run(agent_request)
     serialized = result.model_dump_json()
     assert secret not in serialized
-    assert result.data["nested"]["api_key"] == "[REDACTED]"
+    assert "nested" not in result.data
     assert result.stdout == result.stderr == ""
 
 
@@ -154,8 +154,8 @@ def test_codex_runs_noninteractively_and_parses_jsonl_event_stream(agent_request
     assert argv[:4] == ["codex.exe", "exec", "--sandbox", "read-only"]
     assert "--json" in argv
     assert result.status is AgentStatus.SUCCEEDED
-    assert result.summary == "done"
-    assert result.data == {"message": "done"}
+    assert result.summary == ""
+    assert result.data == {"status":"passed","summary_code":"completed","evidence":[],"artifacts":[]}
     assert "unknown-secret" not in result.model_dump_json()
 
 

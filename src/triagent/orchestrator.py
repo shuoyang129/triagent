@@ -3,10 +3,22 @@ from __future__ import annotations
 from pathlib import Path
 import uuid
 import json
+import base64,hashlib
 
 from triagent.adapters.base import AgentAdapter, AgentRequest, AgentRole, AgentStatus
 from triagent.domain import ReviewSeverity, RiskLevel, StageOutcome, TaskState
 from triagent.store import BudgetExceeded, TaskStore
+from triagent.adapters.cursor import CursorAdapter
+from triagent.adapters.codex import CodexAdapter
+from triagent.adapters.antigravity import AntigravityAdapter
+from triagent.adapters.deepseek import DeepSeekAdapter
+from triagent.adapters.fake import FakeAgent
+
+_TRUSTED={CursorAdapter:("cursor",frozenset({AgentRole.IMPLEMENTER})),CodexAdapter:("codex",frozenset({AgentRole.VERIFIER})),AntigravityAdapter:("antigravity",frozenset({AgentRole.REVIEWER})),DeepSeekAdapter:("deepseek",frozenset({AgentRole.IMPLEMENTER}))}
+def _contract(adapter):
+    if isinstance(adapter,FakeAgent): return "fake",frozenset({AgentRole.IMPLEMENTER,AgentRole.VERIFIER,AgentRole.REVIEWER})
+    try: return _TRUSTED[type(adapter)]
+    except KeyError as error: raise ValueError("untrusted adapter concrete type") from error
 
 
 BLOCKED_STATES = {
@@ -38,7 +50,7 @@ class Orchestrator:
         run_dir = self.store.runs_root / task_id
         return AgentRequest(
             role=role,
-            agent_identity=adapter.identity,
+            agent_identity=_contract(adapter)[0],
             task_file=run_dir / "task.yaml",
             handoff_file=(run_dir / "handoff.json") if role in {AgentRole.VERIFIER, AgentRole.REVIEWER} else None,
             workdir=run_dir / "worktree",
@@ -48,7 +60,8 @@ class Orchestrator:
 
     def _call(self, task_id: str, state: TaskState, adapter: AgentAdapter, request: AgentRequest):
         task = self.store.load(task_id)
-        if request.role not in adapter.allowed_roles or request.agent_identity != adapter.identity:
+        identity,roles=_contract(adapter)
+        if request.role not in roles or request.agent_identity != identity:
             raise ValueError("adapter identity/role mismatch")
         if self._lease_owner: self.store.renew_lease(task_id, self._lease_owner, 600)
         estimate=adapter.estimate_cost(request)
@@ -64,28 +77,33 @@ class Orchestrator:
             self.store.interrupt_agent_call(task_id, call_id, type(error).__name__); raise
         if self._lease_owner: self.store.renew_lease(task_id, self._lease_owner, 600)
         actual = 0.0 if estimate.zero_cost_enforced else result.actual_usd
-        if actual is None:
-            self.store.interrupt_agent_call(task_id, call_id, "missing actual cost")
-            self.store.transition(task_id, state, TaskState.PAUSED_BUDGET, "unknown-actual-cost")
-            return None
         try: self.store.complete_agent_call(task_id, call_id, actual)
         except BudgetExceeded:
             self.store.finalize_overrun_and_pause(task_id,call_id,actual,state); return None
         if result.status is not AgentStatus.SUCCEEDED:
             self.store.transition(task_id, state, TaskState.FAILED_RECOVERABLE, result.status.value)
             return None
+        if result.data.get("status") == "failed":
+            stage={AgentRole.IMPLEMENTER:"implement",AgentRole.VERIFIER:"verify",AgentRole.REVIEWER:"review"}[request.role]
+            self.store.record_outcome(task_id,self._outcome(stage,result,status="failed"))
+            self.store.transition(task_id,state,TaskState.FAILED_RECOVERABLE,"canonical-stage-failed")
+            return None
         return result
 
     def _write_handoff(self, task_id: str, *, tests: list[str] | None = None) -> Path:
         task=self.store.load(task_id); run=self.store.runs_root/task_id; work=run/"worktree"; meta=self.store.workspace(task_id)
-        try:
+        if meta is None and all(isinstance(a,FakeAgent) for a in (self.implementer,self.verifier,self.reviewer)):
+            diff=""
+        else:
+          try:
             import subprocess
             base=meta["base_commit"] if meta else "HEAD"
             diff=subprocess.run(["git","diff","--binary",base],cwd=work,check=True,capture_output=True,text=True).stdout
             untracked=subprocess.run(["git","ls-files","--others","--exclude-standard"],cwd=work,check=True,capture_output=True,text=True).stdout.splitlines()
             for name in untracked:
-                data=(work/name).read_bytes(); diff += f"\nUNTRACKED {name}\n"+data.decode("utf-8",errors="replace")
-        except Exception: diff="unknown/missing"
+                data=(work/name).read_bytes(); record={"path":name,"size":len(data),"sha256":hashlib.sha256(data).hexdigest(),"base64":base64.b64encode(data).decode("ascii")}
+                diff += "\nUNTRACKED_BINARY_JSON "+json.dumps(record,sort_keys=True,separators=(",",":"))+"\n"
+          except Exception as error: raise RuntimeError("canonical handoff generation failed") from error
         payload={"task_spec":task.spec.model_dump(mode="json"),"final_diff":diff,"tests":tests or [],"artifacts":[],"rollback":"preserve task branch; remove worktree only after approval","completed":["implementation"]}
         path=run/"handoff.json"; path.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8"); return path
 
@@ -193,6 +211,6 @@ class Orchestrator:
             self.store.approve_and_transition(task_id, action, TaskState.WAITING_FOR_VISUAL_APPROVAL, TaskState.APPROVAL)
             return TaskState.APPROVAL
         if task.state is TaskState.APPROVAL and action in {"outcome", "merge", "deploy", "destructive", "prune-branch", "live", "billing"}:
-            self.store.record_approval(task_id, action)
+            self.store.approve_requested(task_id, action)
             return task.state
         raise ValueError(f"approval {action!r} is invalid for state {task.state.value}")

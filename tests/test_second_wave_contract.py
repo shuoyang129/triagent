@@ -68,6 +68,7 @@ def test_verifier_and_reviewer_receive_persisted_handoff(tmp_path):
 def test_visual_approval_is_atomic_and_state_specific(tmp_path):
     store=TaskStore(tmp_path); task=store.create_task(spec())
     store.transition(task.id, TaskState.SPEC, TaskState.WAITING_FOR_VISUAL_APPROVAL, "test")
+    store.request_approval(task.id,"visual",{})
     store.approve_and_transition(task.id, "visual", TaskState.WAITING_FOR_VISUAL_APPROVAL, TaskState.APPROVAL)
     assert store.load(task.id).state is TaskState.APPROVAL
     assert "visual" in store.runtime(task.id).approvals

@@ -86,6 +86,9 @@ class TaskStore:
                 except sqlite3.OperationalError as error:
                     if "duplicate column name" not in str(error).lower(): raise
             connection.execute("CREATE TABLE IF NOT EXISTS agent_calls(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, status TEXT NOT NULL, estimated_usd REAL, actual_usd REAL, diagnostic TEXT)")
+            try: connection.execute("ALTER TABLE agent_calls ADD COLUMN charged_usd REAL")
+            except sqlite3.OperationalError as error:
+                if "duplicate column name" not in str(error).lower(): raise
             connection.execute("CREATE TABLE IF NOT EXISTS stage_outcomes(task_id TEXT NOT NULL, stage TEXT NOT NULL, outcome_json TEXT NOT NULL, PRIMARY KEY(task_id, stage))")
             connection.execute("CREATE TABLE IF NOT EXISTS workspace_meta(task_id TEXT PRIMARY KEY, repo TEXT NOT NULL, base_commit TEXT NOT NULL, branch TEXT NOT NULL)")
             connection.execute("CREATE TABLE IF NOT EXISTS approval_records(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action))")
@@ -119,7 +122,7 @@ class TaskStore:
             ).fetchone()
         if row is None:
             raise KeyError(task_id)
-        approvals = frozenset(json.loads(row["approvals_json"]))
+        with self._connect() as connection: approvals=frozenset(r[0] for r in connection.execute("SELECT action FROM approval_records WHERE task_id=?",(task_id,)).fetchall())
         return TaskRuntime(row["agent_calls"], row["repair_attempts"], approvals, row["completed_calls"], row["interrupted_calls"], row["usd_spent"], row["started_at"])
 
     def reserve_agent_call(self, task_id: str, estimated_usd: float | None = None, lease_owner: str | None = None) -> str:
@@ -139,28 +142,30 @@ class TaskStore:
                 raise BudgetExceeded("call or elapsed-time budget exhausted")
             if cost is None: raise BudgetExceeded("unknown call cost cannot be reserved conservatively")
             cost = cost or 0.0
-            if runtime["usd_spent"] + cost > spec.budget.max_usd: raise BudgetExceeded("USD budget exhausted")
+            pending=connection.execute("SELECT COALESCE(SUM(estimated_usd),0) FROM agent_calls WHERE task_id=? AND status='started'",(task_id,)).fetchone()[0]
+            if runtime["usd_spent"] + pending + cost > spec.budget.max_usd: raise BudgetExceeded("USD budget exhausted")
             connection.execute("UPDATE task_runtime SET agent_calls=agent_calls+1, started_at=CASE WHEN started_at='' THEN ? ELSE started_at END WHERE task_id=?", (now.isoformat(), task_id))
-            connection.execute("INSERT INTO agent_calls VALUES(?,?,?,?,?,?)", (call_id, task_id, "started", cost, None, None)); connection.commit()
+            connection.execute("INSERT INTO agent_calls(id,task_id,status,estimated_usd,actual_usd,diagnostic,charged_usd) VALUES(?,?,?,?,?,?,?)", (call_id, task_id, "started", cost, None, None, None)); connection.commit()
             return call_id
         except Exception: connection.rollback(); raise
         finally: connection.close()
 
-    def _finish_call(self, task_id: str, call_id: str, status: str, actual_usd: float, diagnostic: str = "") -> None:
+    def _finish_call(self, task_id: str, call_id: str, status: str, actual_usd: float | None, diagnostic: str = "") -> None:
         column = "completed_calls" if status == "completed" else "interrupted_calls"
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row=connection.execute("SELECT estimated_usd FROM agent_calls WHERE id=? AND task_id=? AND status='started'", (call_id, task_id)).fetchone()
             if row is None: raise StateConflict("call is not pending")
-            if actual_usd > row["estimated_usd"]: raise BudgetExceeded("actual cost exceeds conservative reservation")
-            cursor = connection.execute("UPDATE agent_calls SET status=?,actual_usd=?,diagnostic=? WHERE id=? AND task_id=? AND status='started'", (status, actual_usd, diagnostic, call_id, task_id))
+            if actual_usd is not None and actual_usd > row["estimated_usd"]: raise BudgetExceeded("actual cost exceeds conservative reservation")
+            charged=row["estimated_usd"] if actual_usd is None else actual_usd
+            cursor = connection.execute("UPDATE agent_calls SET status=?,actual_usd=?,charged_usd=?,diagnostic=? WHERE id=? AND task_id=? AND status='started'", (status, actual_usd, charged, diagnostic, call_id, task_id))
             if cursor.rowcount != 1: raise StateConflict("call is not pending")
-            connection.execute(f"UPDATE task_runtime SET {column}={column}+1, usd_spent=usd_spent+? WHERE task_id=?", (actual_usd, task_id))
-    def complete_agent_call(self, task_id: str, call_id: str, actual_usd: float = 0.0): self._finish_call(task_id, call_id, "completed", actual_usd)
+            connection.execute(f"UPDATE task_runtime SET {column}={column}+1, usd_spent=usd_spent+? WHERE task_id=?", (charged, task_id))
+    def complete_agent_call(self, task_id: str, call_id: str, actual_usd: float | None = None): self._finish_call(task_id, call_id, "completed", actual_usd)
     def interrupt_agent_call(self, task_id: str, call_id: str, diagnostic: str, actual_usd: float | None = None):
         with self._connect() as connection: row=connection.execute("SELECT estimated_usd FROM agent_calls WHERE id=? AND task_id=?",(call_id,task_id)).fetchone()
         if row is None: raise StateConflict("call is not pending")
-        self._finish_call(task_id,call_id,"interrupted",row[0] if actual_usd is None else actual_usd,diagnostic[:200])
+        self._finish_call(task_id,call_id,"interrupted",actual_usd,diagnostic[:200])
 
     def finalize_overrun_and_pause(self, task_id: str, call_id: str, actual_usd: float, expected: TaskState) -> None:
         now=datetime.now(UTC).isoformat(); connection=self._connect()
@@ -215,11 +220,12 @@ class TaskStore:
         try:
             connection.execute("BEGIN IMMEDIATE")
             row=connection.execute("SELECT state FROM tasks WHERE id=?", (task_id,)).fetchone()
-            runtime=connection.execute("SELECT approvals_json FROM task_runtime WHERE task_id=?", (task_id,)).fetchone()
-            if row is None or runtime is None: raise KeyError(task_id)
+            runtime=connection.execute("SELECT approvals_json FROM task_runtime WHERE task_id=?", (task_id,)).fetchone(); request=connection.execute("SELECT resource_json FROM approval_requests WHERE task_id=? AND action=?",(task_id,action)).fetchone()
+            if row is None or runtime is None or request is None: raise KeyError(task_id)
             if row["state"] != expected.value: raise StateConflict("approval state changed")
             approvals=sorted(set(json.loads(runtime[0]))|{action})
             connection.execute("UPDATE task_runtime SET approvals_json=? WHERE task_id=?", (json.dumps(approvals),task_id))
+            connection.execute("INSERT INTO approval_records VALUES(?,?,?)",(task_id,action,request[0]))
             connection.execute("UPDATE tasks SET state=?,updated_at=? WHERE id=?", (target.value,timestamp,task_id)); connection.commit()
         except Exception: connection.rollback(); raise
         finally: connection.close()
@@ -258,6 +264,15 @@ class TaskStore:
     def approval_resource(self, task_id: str, action: str) -> dict[str,str] | None:
         with self._connect() as connection: row=connection.execute("SELECT resource_json FROM approval_records WHERE task_id=? AND action=?",(task_id,action)).fetchone()
         return json.loads(row[0]) if row else None
+    def approve_requested(self, task_id: str, action: str) -> TaskRuntime:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            request=connection.execute("SELECT resource_json FROM approval_requests WHERE task_id=? AND action=?",(task_id,action)).fetchone()
+            if request is None or connection.execute("SELECT 1 FROM approval_records WHERE task_id=? AND action=? AND resource_json=?",(task_id,action,request[0])).fetchone(): raise ValueError("no matching outstanding approval request")
+            connection.execute("INSERT INTO approval_records VALUES(?,?,?)",(task_id,action,request[0]))
+            actions=[r[0] for r in connection.execute("SELECT action FROM approval_records WHERE task_id=? ORDER BY action",(task_id,)).fetchall()]
+            connection.execute("UPDATE task_runtime SET approvals_json=? WHERE task_id=?",(json.dumps(actions),task_id))
+        return self.runtime(task_id)
     def request_approval(self, task_id: str, action: str, resource: dict[str,str] | None = None) -> None:
         with self._connect() as connection: connection.execute("INSERT OR REPLACE INTO approval_requests VALUES(?,?,?)",(task_id,action,json.dumps(resource or {},sort_keys=True)))
     def outstanding_approvals(self, task_id: str) -> list[str]:

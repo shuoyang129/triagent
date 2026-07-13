@@ -109,7 +109,7 @@ def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake",
         if run_worktree.exists(): preserved.append(f"preserved worktree: {run_worktree}")
         preserved.append(f"preservation branch may exist: triagent/{task.id}")
         if store.load(task.id).state is TaskState.SPEC: store.fail_setup(task.id, f"Setup failed: {type(error).__name__}", preserved)
-        raise typer.BadParameter(str(error)) from error
+        raise typer.BadParameter("task setup failed; inspect persisted task status") from error
     (store.runs_root / task.id / "final-report.md").write_text(render_persisted_report(store, task.id), encoding="utf-8")
     typer.echo(f"Task: {task.id}\nState: {state.value}\nReport: {store.runs_root / task.id / 'final-report.md'}")
 
@@ -127,7 +127,7 @@ def approve(task_id: str, action: str, data_root: DataRoot = None) -> None:
     try:
         state = orchestrator.approve(task_id, action)
     except ValueError as error:
-        typer.echo(f"Approval refused: {error}", err=True)
+        typer.echo("Approval refused: no matching outstanding request", err=True)
         raise typer.Exit(2) from error
     typer.echo(f"Task: {task_id}\nState: {state.value}")
 

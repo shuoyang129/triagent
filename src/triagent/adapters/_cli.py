@@ -86,7 +86,7 @@ def invoke_codex_jsonl(
     cwd: Path,
     timeout: float,
     env: Mapping[str, str] | None = None,
-    secret_values: Sequence[str] = (),
+    secret_values: Sequence[str] = (), role: AgentRole = AgentRole.VERIFIER,
 ) -> AgentResult:
     try:
         process = runner.run(argv, cwd, timeout, env or {})
@@ -125,7 +125,21 @@ def invoke_codex_jsonl(
         return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="CLI returned no final agent message")
     message = sanitize(messages[-1], secret_values)
     assert isinstance(message, str)
-    return AgentResult(status=AgentStatus.SUCCEEDED, summary=message, data={"message": message})
+    try: payload=json.loads(message)
+    except json.JSONDecodeError: payload={"status":"passed"}
+    try: data=_canonical(role,payload)
+    except ValueError: return AgentResult(status=AgentStatus.INVALID_OUTPUT,summary="CLI returned invalid canonical output")
+    return AgentResult(status=AgentStatus.SUCCEEDED, data=data)
+
+def _canonical(role: AgentRole, payload: dict) -> dict:
+    status=payload.get("status","passed")
+    evidence=payload.get("evidence",[]); artifacts=payload.get("artifacts",[])
+    if status not in {"passed","failed"} or not isinstance(evidence,list) or not all(isinstance(x,str) for x in evidence) or not isinstance(artifacts,list) or not all(isinstance(x,str) for x in artifacts): raise ValueError
+    data={"status":status,"summary_code":{AgentRole.IMPLEMENTER:"completed",AgentRole.VERIFIER:"verified",AgentRole.REVIEWER:"clean"}[role],"evidence":evidence,"artifacts":artifacts}
+    if role is AgentRole.REVIEWER:
+        if not isinstance(payload.get("findings",[]),list): raise ValueError
+        data["findings"]=payload.get("findings",[])
+    return data
 
 
 def invoke_json(
@@ -134,7 +148,7 @@ def invoke_json(
     cwd: Path,
     timeout: float,
     env: Mapping[str, str] | None = None,
-    secret_values: Sequence[str] = (),
+    secret_values: Sequence[str] = (), role: AgentRole = AgentRole.IMPLEMENTER,
 ) -> AgentResult:
     try:
         process = runner.run(argv, cwd, timeout, env or {})
@@ -152,14 +166,15 @@ def invoke_json(
         payload = json.loads(process.stdout)
     except (json.JSONDecodeError, TypeError):
         return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="CLI returned malformed structured output")
-    if not isinstance(payload, dict) or not isinstance(payload.get("summary"), str):
+    if not isinstance(payload, dict):
         return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="CLI returned invalid structured output")
     payload = sanitize(payload, secret_values)
     assert isinstance(payload, dict)
+    try: data=_canonical(role,payload)
+    except ValueError: return AgentResult(status=AgentStatus.INVALID_OUTPUT,summary="CLI returned invalid canonical output")
     return AgentResult(
         status=AgentStatus.SUCCEEDED,
-        summary=payload["summary"],
-        data=payload,
+        data=data,
         stdout="",
         stderr="",
         actual_usd=payload.get("actual_usd") if isinstance(payload.get("actual_usd"), (int, float)) else None,

@@ -27,8 +27,8 @@ def test_interrupted_paid_call_charges_reserved_estimate(tmp_path):
     store.interrupt_agent_call(task.id,call,"crash")
     assert store.runtime(task.id).usd_spent == pytest.approx(1.25)
     with store._connect() as c:
-        row=c.execute("select estimated_usd,actual_usd,status from agent_calls where id=?",(call,)).fetchone()
-    assert tuple(row)==(1.25,1.25,"interrupted")
+        row=c.execute("select estimated_usd,actual_usd,charged_usd,status from agent_calls where id=?",(call,)).fetchone()
+    assert tuple(row)==(1.25,None,1.25,"interrupted")
 
 def test_deepseek_capability_without_live_confirmation_calls_no_runner(tmp_path):
     runner=Runner(AssertionError("runner must not execute"))
@@ -80,4 +80,6 @@ def test_handoff_diff_uses_persisted_base_and_all_change_categories(tmp_path):
     (dest/"unstaged.txt").write_text("unstaged-change\n",encoding="utf-8"); (dest/"untracked.txt").write_text("untracked-change\n",encoding="utf-8")
     path=Orchestrator(store,FakeAgent([]),FakeAgent([]),FakeAgent([]))._write_handoff(task.id)
     diff=json.loads(path.read_text(encoding="utf-8"))["final_diff"]
-    for marker in ("committed-change","staged-change","unstaged-change","untracked-change"): assert marker in diff
+    for marker in ("committed-change","staged-change","unstaged-change"): assert marker in diff
+    record=json.loads(diff.split("UNTRACKED_BINARY_JSON ",1)[1]); import base64
+    assert base64.b64decode(record["base64"]) == (dest/"untracked.txt").read_bytes()

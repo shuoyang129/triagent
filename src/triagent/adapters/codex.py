@@ -31,4 +31,4 @@ class CodexAdapter(AgentAdapter):
             return error
         assert prompt is not None
         argv = [*self._command, "exec", "--sandbox", "read-only", "--json", prompt]
-        return invoke_codex_jsonl(self._runner, argv, request.workdir, request.timeout_seconds, self._env, self._secrets)
+        return invoke_codex_jsonl(self._runner, argv, request.workdir, request.timeout_seconds, self._env, self._secrets, request.role)

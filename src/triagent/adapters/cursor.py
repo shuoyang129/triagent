@@ -72,4 +72,4 @@ class CursorAdapter(AgentAdapter):
         if error:
             return error
         assert prompt is not None
-        return invoke_json(self._runner, self._command("--print", "--json", prompt), request.workdir, request.timeout_seconds, self._env, self._secrets)
+        return invoke_json(self._runner, self._command("--print", "--json", prompt), request.workdir, request.timeout_seconds, self._env, self._secrets, request.role)

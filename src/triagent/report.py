@@ -44,10 +44,6 @@ def render_report(values: Mapping[str, str], *, secret_values: tuple[str, ...] =
     ) + "\n"
 
 
-def write_report(path: Path, values: Mapping[str, str]) -> Path:
-    path.write_text(render_report(values), encoding="utf-8")
-    return path
-
 def render_persisted_report(store: TaskStore, task_id: str) -> str:
     task = store.load(task_id); outcomes = store.outcomes(task_id)
     verify = outcomes.get("verify"); review = outcomes.get("review"); setup = outcomes.get("setup")
