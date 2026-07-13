@@ -280,6 +280,58 @@ class TaskStore:
         finally:
             connection.close()
 
+    def assert_paid_operations_available(
+        self,
+        task_id: str,
+        estimated_usd: tuple[float | None, ...],
+        *,
+        lease_owner: str,
+    ) -> None:
+        connection = self._connect()
+        try:
+            import math
+            import time
+            connection.execute("BEGIN IMMEDIATE")
+            task = connection.execute(
+                "SELECT spec_json FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            runtime = connection.execute(
+                "SELECT * FROM task_runtime WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if task is None or runtime is None:
+                raise KeyError(task_id)
+            if (
+                runtime["lease_owner"] != lease_owner
+                or runtime["lease_until"] is None
+                or runtime["lease_until"] < time.time()
+            ):
+                raise LeaseConflict("controller lease is not owned")
+            if not estimated_usd or any(
+                value is None
+                or isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+                for value in estimated_usd
+            ):
+                raise BudgetExceeded("paid operations require positive conservative estimates")
+            spec = TaskSpec.model_validate_json(task["spec_json"])
+            now = datetime.now(UTC)
+            started = datetime.fromisoformat(runtime["started_at"]) if runtime["started_at"] else now
+            if (
+                runtime["agent_calls"] + len(estimated_usd) > spec.budget.max_agent_calls
+                or (now - started).total_seconds() >= spec.budget.max_minutes * 60
+            ):
+                raise BudgetExceeded("call or elapsed-time budget exhausted")
+            pending = connection.execute(
+                "SELECT COALESCE(SUM(estimated_usd),0) FROM agent_calls WHERE task_id=? AND status='started'",
+                (task_id,),
+            ).fetchone()[0]
+            if runtime["usd_spent"] + pending + sum(estimated_usd) > spec.budget.max_usd:
+                raise BudgetExceeded("USD budget exhausted")
+        finally:
+            connection.close()
+
     def _finish_call(self, task_id: str, call_id: str, status: str, actual_usd: float | None, diagnostic: str = "") -> None:
         column = "completed_calls" if status == "completed" else "interrupted_calls"
         with self._connect() as connection:

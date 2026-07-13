@@ -266,7 +266,13 @@ class ResumeStageRunner:
         return ProcessResult(0, json.dumps(event), "", False)
 
 
-def _deepseek_resume_task(tmp_path: Path, profile: Path, *, max_usd: float = 5):
+def _deepseek_resume_task(
+    tmp_path: Path,
+    profile: Path,
+    *,
+    max_usd: float = 5,
+    max_agent_calls: int = 10,
+):
     config = _live_profile(profile, deepseek=True)
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -279,7 +285,9 @@ def _deepseek_resume_task(tmp_path: Path, profile: Path, *, max_usd: float = 5):
     store = TaskStore(tmp_path / "data")
     task = store.create_task(TaskSpec(
         goal="x", scope=[str(repo)], acceptance=["x"],
-        budget=Budget(max_agent_calls=10, max_minutes=60, max_usd=max_usd),
+        budget=Budget(
+            max_agent_calls=max_agent_calls, max_minutes=60, max_usd=max_usd
+        ),
     ))
     work = store.runs_root / task.id / "worktree"
     work.rmdir()
@@ -400,6 +408,62 @@ def test_deepseek_resume_probe_budget_refuses_without_probe_or_implementation(
     assert deepseek_runner.calls == []
     assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
     assert store.runtime(task.id).repair_attempts == 0
+    assert store.recovery_checkpoint(task.id) == checkpoint
+
+
+def test_deepseek_resume_one_remaining_call_slot_refuses_before_probe(
+    tmp_path: Path, monkeypatch
+) -> None:
+    profile = tmp_path / "deepseek.toml"
+    store, task = _deepseek_resume_task(
+        tmp_path, profile, max_agent_calls=1
+    )
+    checkpoint = store.recovery_checkpoint(task.id)
+    deepseek_runner = DeepSeekResumeRunner()
+    monkeypatch.setattr(
+        cli_module, "DeepSeekAdapter",
+        lambda *args, **kwargs: RealDeepSeekAdapter(
+            runner=deepseek_runner, probe_dir=tmp_path, *args, **kwargs
+        ),
+    )
+
+    result = runner.invoke(app, [
+        "resume", "--profile", str(profile), "--live-confirmed", "--billing-confirmed",
+        "--data-root", str(store.root), task.id,
+    ])
+
+    assert result.exit_code != 0
+    assert deepseek_runner.calls == []
+    assert store.runtime(task.id).agent_calls == 0
+    assert store.runtime(task.id).repair_attempts == 0
+    assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
+    assert store.recovery_checkpoint(task.id) == checkpoint
+
+
+def test_deepseek_resume_combined_usd_shortfall_refuses_before_probe(
+    tmp_path: Path, monkeypatch
+) -> None:
+    profile = tmp_path / "deepseek.toml"
+    store, task = _deepseek_resume_task(tmp_path, profile, max_usd=.6)
+    checkpoint = store.recovery_checkpoint(task.id)
+    deepseek_runner = DeepSeekResumeRunner()
+    monkeypatch.setattr(
+        cli_module, "DeepSeekAdapter",
+        lambda *args, **kwargs: RealDeepSeekAdapter(
+            runner=deepseek_runner, probe_dir=tmp_path, *args, **kwargs
+        ),
+    )
+
+    result = runner.invoke(app, [
+        "resume", "--profile", str(profile), "--live-confirmed", "--billing-confirmed",
+        "--data-root", str(store.root), task.id,
+    ])
+
+    assert result.exit_code != 0
+    assert deepseek_runner.calls == []
+    assert store.runtime(task.id).agent_calls == 0
+    assert store.runtime(task.id).repair_attempts == 0
+    assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
     assert store.recovery_checkpoint(task.id) == checkpoint
 
 

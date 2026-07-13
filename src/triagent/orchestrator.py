@@ -367,6 +367,14 @@ class Orchestrator:
             if stage in {"verify", "review"}:
                 self.store.restore_candidate_worktree(task_id)
             if stage == "implement" and type(self.implementer) is DeepSeekAdapter:
+                self.store.assert_paid_operations_available(
+                    task_id,
+                    (
+                        self.implementer_probe_estimated_usd,
+                        estimate.estimated_usd,
+                    ),
+                    lease_owner=owner,
+                )
                 capability = self.store.execute_paid_operation(
                     task_id,
                     self.implementer_probe_estimated_usd,
