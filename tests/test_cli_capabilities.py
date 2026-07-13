@@ -186,15 +186,39 @@ def test_cursor_headless_run_trusts_controller_created_worktree(agent_request: A
     assert "--trust" in runner.calls[0][0]
 
 
-def test_cursor_classifies_non_json_nested_result_without_persisting_vendor_text(agent_request: AgentRequest) -> None:
+def test_cursor_accepts_free_text_result_as_transport_success_without_persisting_vendor_text(agent_request: AgentRequest) -> None:
     vendor_text = "completed but not canonical"
-    runner = FakeRunner(completed(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": vendor_text})))
+    runner = FakeRunner(completed(json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": vendor_text,
+    })))
+
+    result = CursorAdapter(runner=runner).run(agent_request)
+
+    assert result.status is AgentStatus.SUCCEEDED
+    assert result.data == {
+        "status": "passed",
+        "summary_code": "completed",
+        "evidence": [],
+        "artifacts": [],
+    }
+    assert vendor_text not in result.model_dump_json()
+
+
+def test_cursor_still_rejects_invalid_outer_envelope(agent_request: AgentRequest) -> None:
+    runner = FakeRunner(completed(json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "is_error": True,
+        "result": "ignored",
+    })))
 
     result = CursorAdapter(runner=runner).run(agent_request)
 
     assert result.status is AgentStatus.INVALID_OUTPUT
-    assert result.data == {"diagnostic_code": "cursor-result-non-json"}
-    assert vendor_text not in result.model_dump_json()
+    assert result.data == {"diagnostic_code": "cursor-envelope-invalid"}
 
 
 def test_cursor_does_not_probe_models_or_smoke_without_billing_confirmation(tmp_path: Path) -> None:
