@@ -45,6 +45,12 @@ def _profile_command(config: dict, name: str) -> list[str]:
     return value
 
 
+def _fallback_profile(config:dict)->tuple[str,bool]:
+    agents=config.get("agents",{})
+    name="deepseek" if "deepseek" in agents else "opencode"
+    return name,agents.get(name,{}).get("enabled") is True
+
+
 def _status(value: bool | None) -> str:
     if value is None:
         return "unknown"
@@ -66,13 +72,18 @@ def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake",
         billing_confirmed: Annotated[bool, typer.Option("--billing-confirmed")] = False) -> None:
     if profile != "fake" and not (live_confirmed and billing_confirmed):
         raise typer.BadParameter("real profiles require --live-confirmed and --billing-confirmed")
-    config=None; budget=Budget()
+    config=None; budget=Budget(); fallback_name="opencode"; fallback_enabled=False; fallback_estimate=None; probe_cost=None
     try:
         if profile != "fake":
             config=tomllib.loads(Path(profile).read_text(encoding="utf-8"))
             values=config.get("budget",{})
             budget=Budget(max_agent_calls=int(values.get("max_agent_calls",20)),max_minutes=int(values.get("max_minutes",60)),max_usd=float(values.get("max_usd",0)))
-            for agent in ("cursor","codex","antigravity","opencode"):_profile_command(config,agent)
+            for agent in ("cursor","codex","antigravity"):_profile_command(config,agent)
+            fallback_name,fallback_enabled=_fallback_profile(config)
+            if fallback_enabled:
+                _profile_command(config,fallback_name)
+                fallback_estimate=_priced(config,fallback_name);probe_cost=_priced(config,fallback_name,"probe_estimated_usd")
+                if fallback_estimate is None or fallback_estimate<=0 or probe_cost is None or probe_cost<=0:raise ValueError("invalid fallback cost estimates")
         GitWorkspace.validate(repo)
     except (OSError,tomllib.TOMLDecodeError,ValueError,TypeError,RuntimeError):
         raise typer.BadParameter("task input validation failed") from None
@@ -97,9 +108,8 @@ def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake",
             antigravity = AntigravityAdapter(command=_profile_command(config, "antigravity"), estimated_usd=_priced(config,"antigravity"))
             cursor_caps=cursor.capabilities()  # preferred free/version/auth probe first; no model smoke
             capabilities={"cursor":cursor_caps,"deepseek":False}
-            if not cursor_caps.available:
-                probe_cost=_priced(config,"opencode","probe_estimated_usd")
-                deepseek=DeepSeekAdapter(command=_profile_command(config,"opencode"),enabled=True,billing_confirmed=True,live_confirmed=True,estimated_usd=_priced(config,"opencode"))
+            if not cursor_caps.available and fallback_enabled:
+                deepseek=DeepSeekAdapter(command=_profile_command(config,fallback_name),enabled=True,billing_confirmed=billing_confirmed,live_confirmed=live_confirmed,estimated_usd=fallback_estimate)
                 deepseek_caps=store.execute_paid_operation(task.id,probe_cost,deepseek.capabilities)
                 capabilities["deepseek"]=deepseek_caps
             choice = ImplementationRouter().choose(cursor_usage=0.0, capabilities=capabilities)

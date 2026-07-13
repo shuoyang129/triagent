@@ -122,6 +122,7 @@ estimated_usd=0.5
 command=["agy"]
 estimated_usd=0.5
 [agents.opencode]
+enabled=true
 command=["opencode"]
 estimated_usd=0.5
 probe_estimated_usd=0.25
