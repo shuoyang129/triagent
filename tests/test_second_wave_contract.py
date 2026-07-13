@@ -98,6 +98,7 @@ def test_cli_partial_git_failure_is_durable_and_records_preserved_resource(tmp_p
         (destination/"partial").write_text("x",encoding="utf-8")
         raise RuntimeError("partial git failure with secret detail")
     monkeypatch.setattr(cli_module.GitWorkspace,"create",partial)
+    monkeypatch.setattr(cli_module.GitWorkspace,"validate",lambda repo:(Path(repo),"base"))
     result=CliRunner().invoke(cli_module.app,["run","--profile","fake","--data-root",str(data),str(repo),"x"])
     assert result.exit_code != 0
     task_id=next((data/"runs").iterdir()).name; store=TaskStore(data)
@@ -130,13 +131,17 @@ max_usd=5
 ''',encoding="utf-8")
     order=[]
     class Stub(FakeAgent):
-        def __init__(self,*args,identity,available=True,**kwargs):
-            super().__init__([AgentResult(status=AgentStatus.SUCCEEDED,data={"status":"passed","summary_code":"done"})]); self.identity=identity; self.available=available
+        def __init__(self,*args,available=True,**kwargs):
+            super().__init__([AgentResult(status=AgentStatus.SUCCEEDED,data={"status":"passed","summary_code":"done"})]); self.available=available
         def capabilities(self): order.append(self.identity); return type("C",(),{"available":self.available})()
-    monkeypatch.setattr(cli_module,"CursorAdapter",lambda *a,**k: Stub(identity="cursor",available=False))
-    monkeypatch.setattr(cli_module,"DeepSeekAdapter",lambda *a,**k: Stub(identity="deepseek"))
-    monkeypatch.setattr(cli_module,"CodexAdapter",lambda *a,**k: Stub(identity="codex"))
-    monkeypatch.setattr(cli_module,"AntigravityAdapter",lambda *a,**k: Stub(identity="antigravity"))
+    class CursorStub(Stub): identity="cursor"; allowed_roles=frozenset({AgentRole.IMPLEMENTER})
+    class DeepSeekStub(Stub): identity="deepseek"; allowed_roles=frozenset({AgentRole.IMPLEMENTER})
+    class CodexStub(Stub): identity="codex"; allowed_roles=frozenset({AgentRole.VERIFIER})
+    class AntigravityStub(Stub): identity="antigravity"; allowed_roles=frozenset({AgentRole.REVIEWER})
+    monkeypatch.setattr(cli_module,"CursorAdapter",lambda *a,**k: CursorStub(available=False))
+    monkeypatch.setattr(cli_module,"DeepSeekAdapter",lambda *a,**k: DeepSeekStub())
+    monkeypatch.setattr(cli_module,"CodexAdapter",lambda *a,**k: CodexStub())
+    monkeypatch.setattr(cli_module,"AntigravityAdapter",lambda *a,**k: AntigravityStub())
     result=CliRunner().invoke(cli_module.app,["run","--profile",str(profile),"--live-confirmed","--billing-confirmed","--data-root",str(tmp_path/"data"),str(repo),"x"])
     assert result.exit_code == 0, result.output
     assert order[:2] == ["cursor","deepseek"]
@@ -150,4 +155,9 @@ def test_pruning_uses_durable_task_approval(tmp_path):
     (repo/"a").write_text("a",encoding="utf-8"); subprocess.run(["git","add","a"],cwd=repo,check=True); subprocess.run(["git","commit","-qm","a"],cwd=repo,check=True)
     ws=GitWorkspace.create(repo,"prune"); ws.cleanup(); store=TaskStore(tmp_path/"data"); task=store.create_task(spec())
     with pytest.raises(PermissionError): ws.prune_branch(store=store, task_id=task.id)
-    store.record_approval(task.id,"prune-branch"); ws.prune_branch(store=store, task_id=task.id)
+    bound={"repo":str(ws.repo),"task_id":ws.task_id,"branch":f"triagent/{ws.task_id}"}
+    task=store.create_task(spec()) if task.id != ws.task_id else task
+    # Approval is bound to the workspace identifier; use a store task with that exact id contract.
+    with store._connect() as c:
+        c.execute("UPDATE tasks SET id=? WHERE id=?",(ws.task_id,task.id)); c.execute("UPDATE task_runtime SET task_id=? WHERE task_id=?",(ws.task_id,task.id))
+    store.record_approval(ws.task_id,"prune-branch",bound); ws.prune_branch(store=store, task_id=ws.task_id)

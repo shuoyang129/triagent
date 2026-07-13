@@ -51,15 +51,12 @@ def write_report(path: Path, values: Mapping[str, str]) -> Path:
 def render_persisted_report(store: TaskStore, task_id: str) -> str:
     task = store.load(task_id); outcomes = store.outcomes(task_id)
     verify = outcomes.get("verify"); review = outcomes.get("review"); setup = outcomes.get("setup")
-    approvals=store.runtime(task_id).approvals
-    if task.state.value == "WAITING_FOR_VISUAL_APPROVAL": pending="visual"
-    elif task.state.value == "APPROVAL": pending=", ".join(x for x in ("outcome","merge") if x not in approvals) or "none"
-    else: pending="none"
+    pending=", ".join(store.outstanding_approvals(task_id)) or "none"
     values = {
         "state": task.state.value,
-        "user outcome": (setup or outcomes.get("implement")).summary if (setup or outcomes.get("implement")) else "unknown/missing",
-        "tests": verify.summary if verify else "unknown/missing",
-        "independent review": review.summary if review else "unknown/missing",
+        "user outcome": ((setup or outcomes.get("implement")).diagnostic or (setup or outcomes.get("implement")).summary) if (setup or outcomes.get("implement")) else "unknown/missing",
+        "tests": f"{verify.summary}: {', '.join(verify.evidence)}" if verify and verify.evidence else (verify.summary if verify else "unknown/missing"),
+        "independent review": f"{review.summary}: {', '.join(review.evidence)}" if review and review.evidence else (review.summary if review else "unknown/missing"),
         "visual artifacts": ", ".join(review.artifacts) if review and review.artifacts else "unknown/missing",
         "residual risk": "unknown/missing",
         "rollback": next((o.rollback for o in outcomes.values() if o.rollback != "unknown/missing"), "unknown/missing"),

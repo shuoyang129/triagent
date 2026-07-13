@@ -71,6 +71,11 @@ class AgentAdapter(ABC):
     identity: str = "unknown"
     allowed_roles: frozenset[AgentRole] = frozenset()
 
+    def __setattr__(self, name, value):
+        if name in {"identity", "allowed_roles"}:
+            raise AttributeError(f"{name} is an immutable adapter capability")
+        super().__setattr__(name, value)
+
     def estimate_cost(self, request: AgentRequest | None) -> CostEstimate:
         return CostEstimate.unknown()
     @abstractmethod

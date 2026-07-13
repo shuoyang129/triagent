@@ -16,7 +16,7 @@ from triagent.adapters.fake import FakeAgent
 from triagent.domain import Budget, TaskSpec, TaskState
 from triagent.git_workspace import GitWorkspace
 from triagent.orchestrator import Orchestrator
-from triagent.report import render_persisted_report, render_report, write_report
+from triagent.report import render_persisted_report
 from triagent.router import ImplementationRouter
 from triagent.store import TaskStore
 
@@ -41,19 +41,6 @@ def _spec(repo: Path, goal: str, budget: Budget | None = None) -> TaskSpec:
 def _priced(config: dict, name: str, field: str = "estimated_usd") -> float | None:
     value=config.get("agents",{}).get(name,{}).get(field)
     return float(value) if isinstance(value,(int,float)) and value >= 0 else None
-
-
-def _values(state: str, *, complete: bool = False) -> dict[str, str]:
-    return {
-        "state": state,
-        "user outcome": "Workflow completed and is ready for approval." if complete else "Task recorded.",
-        "tests": "Fake verification passed." if complete else "Not run.",
-        "independent review": "Fake independent review passed." if complete else "Pending.",
-        "visual artifacts": "None.",
-        "residual risk": "Human approval is still required." if complete else "Implementation has not run.",
-        "rollback": "Discard the task worktree; the source checkout is unchanged.",
-        "pending approval": "Approve the result." if complete else "Run the task.",
-    }
 
 
 def _profile_command(config: dict, name: str) -> list[str]:
@@ -86,12 +73,14 @@ def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake",
         config=tomllib.loads(Path(profile).read_text(encoding="utf-8"))
         values=config.get("budget",{})
         budget=Budget(max_agent_calls=int(values.get("max_agent_calls",20)),max_minutes=int(values.get("max_minutes",60)),max_usd=float(values.get("max_usd",0)))
+    GitWorkspace.validate(repo)
     store = TaskStore(_root(data_root)); task = store.create_task(_spec(repo, goal, budget))
-    if profile != "fake": store.record_approval(task.id,"live"); store.record_approval(task.id,"billing")
     run_worktree = store.runs_root / task.id / "worktree"
-    run_worktree.rmdir()
     try:
-        GitWorkspace.create(repo, task.id, destination=run_worktree)
+        if profile != "fake": store.record_approval(task.id,"live"); store.record_approval(task.id,"billing")
+        run_worktree.rmdir()
+        workspace=GitWorkspace.create(repo, task.id, destination=run_worktree)
+        store.set_workspace(task.id,str(workspace.repo),workspace.base_commit,f"triagent/{task.id}")
         if profile == "fake":
             success = AgentResult(status=AgentStatus.SUCCEEDED, data={"status":"passed","summary_code":"completed","evidence":[]})
             orchestrator = Orchestrator(store, _FakeImplementer([success]), FakeAgent([success]), FakeAgent([success]))
@@ -106,8 +95,11 @@ def run(repo: Path, goal: str, profile: Annotated[str, typer.Option()] = "fake",
                 probe_cost=_priced(config,"opencode","probe_estimated_usd")
                 call=store.reserve_agent_call(task.id,probe_cost)
                 deepseek=DeepSeekAdapter(command=_profile_command(config,"opencode"),enabled=True,billing_confirmed=True,live_confirmed=True,estimated_usd=_priced(config,"opencode"))
-                deepseek_caps=deepseek.capabilities()
-                store.complete_agent_call(task.id,call,probe_cost or 0.0)
+                try:
+                    deepseek_caps=deepseek.capabilities()
+                except BaseException as error:
+                    store.interrupt_agent_call(task.id,call,type(error).__name__); raise
+                else: store.complete_agent_call(task.id,call,probe_cost or 0.0)
                 capabilities["deepseek"]=deepseek_caps
             choice = ImplementationRouter().choose(cursor_usage=0.0, capabilities=capabilities)
             orchestrator = Orchestrator(store, cursor if choice.name == "cursor" else deepseek, codex, antigravity)

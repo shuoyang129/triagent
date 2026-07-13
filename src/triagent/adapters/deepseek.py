@@ -44,6 +44,8 @@ class DeepSeekAdapter(AgentAdapter):
         if not self._billing:
             installed = probe(self._runner, [*self._command, "--version"], self._env)[0] if self._probe_installed else None
             return DeepSeekCapabilities(available=False, installed=installed, authenticated=None, ready=False, enabled=True, billing_confirmed=False)
+        if not self._live_confirmed:
+            return DeepSeekCapabilities(available=False, installed=None, authenticated=None, ready=False, enabled=True, billing_confirmed=True)
         installed, version = probe(self._runner, [*self._command, "--version"], self._env)
         reachable = listed = smoke = False
         if installed:

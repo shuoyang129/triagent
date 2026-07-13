@@ -50,14 +50,17 @@ class GitWorkspace:
     base_commit: str
 
     @classmethod
+    def validate(cls, repo: Path) -> tuple[Path,str]:
+        repo=Path(repo).resolve(); base=_git(repo,"rev-parse","HEAD")
+        if _git(repo,"status","--porcelain","--","."): raise RuntimeError("dirty source checkout; commit or stash changes before creating a task")
+        return repo,base
+
+    @classmethod
     def create(cls, repo: Path, task_id: str, destination: Path | None = None) -> GitWorkspace:
         if not _TASK_ID.fullmatch(task_id) or task_id in {".", ".."}:
             raise ValueError(f"invalid task_id: {task_id!r}")
 
-        repo = Path(repo).resolve()
-        if _git(repo, "status", "--porcelain", "--", "."):
-            raise RuntimeError("dirty source checkout; commit or stash changes before creating a task")
-        base_commit = _git(repo, "rev-parse", "HEAD")
+        repo,base_commit=cls.validate(repo)
         if destination is None:
             root = repo.parent / ".worktrees" / repo.name
             path = root / task_id
@@ -122,7 +125,8 @@ class GitWorkspace:
         _git(self.repo, "worktree", "remove", str(self.path))
 
     def prune_branch(self, *, store=None, task_id: str | None = None) -> None:
-        if store is None or task_id is None or "prune-branch" not in store.runtime(task_id).approvals:
+        expected={"repo":str(self.repo),"task_id":self.task_id,"branch":f"triagent/{self.task_id}"}
+        if store is None or task_id is None or task_id != self.task_id or store.approval_resource(task_id,"prune-branch") != expected:
             raise PermissionError("branch pruning requires durable prune-branch approval")
         if self.path.exists():
             raise RuntimeError("clean up the worktree before pruning its preservation branch")

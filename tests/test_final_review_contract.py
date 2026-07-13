@@ -58,10 +58,10 @@ def test_concurrent_approval_updates_are_preserved_and_lease_is_single_writer(tm
 
 def test_structured_outcomes_only_and_missing_report_evidence(tmp_path):
     store = TaskStore(tmp_path); task = store.create_task(TaskSpec(goal="x", scope=["x"], acceptance=["x"]))
-    store.record_outcome(task.id, StageOutcome(stage="verify", status="passed", summary="tests pass"))
+    store.record_outcome(task.id, StageOutcome(stage="verify", status="passed", summary="verified", evidence=["tests pass"]))
     report = render_persisted_report(store, task.id)
     assert "tests pass" in report and "unknown/missing" in report
-    with pytest.raises(Exception): StageOutcome(stage="review", status="passed", summary="ok", reasoning="secret")
+    with pytest.raises(Exception): StageOutcome(stage="review", status="passed", summary="clean", reasoning="secret")
 
 
 def test_dirty_repository_is_refused_and_branch_prune_requires_approval(tmp_path):

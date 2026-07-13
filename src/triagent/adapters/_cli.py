@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from triagent.adapters.base import AgentResult, AgentStatus
+from triagent.adapters.base import AgentResult, AgentStatus, AgentRole
 from triagent.adapters.process import ProcessRunner
 
 REDACTED = "[REDACTED]"
@@ -42,8 +42,15 @@ def sanitize(value: object, secrets: Sequence[str], key: str = "") -> object:
 
 def read_prompt(request) -> tuple[str | None, AgentResult | None]:
     try:
-        return request.task_file.read_text(encoding="utf-8"), None
-    except (OSError, UnicodeError):
+        task_bytes=request.task_file.read_bytes()
+        task_bytes.decode("utf-8")
+        handoff_bytes=b""
+        if request.role in {AgentRole.VERIFIER, AgentRole.REVIEWER}:
+            if request.handoff_file is None: raise ValueError("handoff required")
+            handoff_bytes=request.handoff_file.read_bytes(); json.loads(handoff_bytes.decode("utf-8"))
+        payload=b"TRIAGENT_INPUT_V1\nTASK\n"+task_bytes+b"\nHANDOFF\n"+handoff_bytes
+        return payload.decode("utf-8"), None
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
         return None, AgentResult(status=AgentStatus.FAILED, summary="Unable to read task file")
 
 

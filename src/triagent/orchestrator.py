@@ -68,17 +68,23 @@ class Orchestrator:
             self.store.interrupt_agent_call(task_id, call_id, "missing actual cost")
             self.store.transition(task_id, state, TaskState.PAUSED_BUDGET, "unknown-actual-cost")
             return None
-        self.store.complete_agent_call(task_id, call_id, actual)
+        try: self.store.complete_agent_call(task_id, call_id, actual)
+        except BudgetExceeded:
+            self.store.finalize_overrun_and_pause(task_id,call_id,actual,state); return None
         if result.status is not AgentStatus.SUCCEEDED:
             self.store.transition(task_id, state, TaskState.FAILED_RECOVERABLE, result.status.value)
             return None
         return result
 
     def _write_handoff(self, task_id: str, *, tests: list[str] | None = None) -> Path:
-        task=self.store.load(task_id); run=self.store.runs_root/task_id; work=run/"worktree"
+        task=self.store.load(task_id); run=self.store.runs_root/task_id; work=run/"worktree"; meta=self.store.workspace(task_id)
         try:
             import subprocess
-            diff=subprocess.run(["git","diff","--binary","HEAD"],cwd=work,check=True,capture_output=True,text=True).stdout
+            base=meta["base_commit"] if meta else "HEAD"
+            diff=subprocess.run(["git","diff","--binary",base],cwd=work,check=True,capture_output=True,text=True).stdout
+            untracked=subprocess.run(["git","ls-files","--others","--exclude-standard"],cwd=work,check=True,capture_output=True,text=True).stdout.splitlines()
+            for name in untracked:
+                data=(work/name).read_bytes(); diff += f"\nUNTRACKED {name}\n"+data.decode("utf-8",errors="replace")
         except Exception: diff="unknown/missing"
         payload={"task_spec":task.spec.model_dump(mode="json"),"final_diff":diff,"tests":tests or [],"artifacts":[],"rollback":"preserve task branch; remove worktree only after approval","completed":["implementation"]}
         path=run/"handoff.json"; path.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8"); return path
@@ -88,10 +94,16 @@ class Orchestrator:
         data=result.data
         allowed={"status","summary_code","evidence","artifacts","findings","tests","actual_usd"}
         if set(data)-allowed: raise ValueError("adapter result contains non-allowlisted fields")
-        evidence=data.get("evidence", []) if isinstance(data.get("evidence", []), list) else []
-        artifacts=data.get("artifacts", []) if isinstance(data.get("artifacts", []), list) else []
-        code=data.get("summary_code", "completed" if status=="passed" else "requires-repair")
-        return StageOutcome(stage=stage,status=status,summary=str(code),evidence=[str(x) for x in evidence],artifacts=[str(x) for x in artifacts])
+        evidence=data.get("evidence", []); artifacts=data.get("artifacts", []); findings=data.get("findings",[])
+        if not isinstance(evidence,list) or not all(isinstance(x,str) for x in evidence): raise ValueError("invalid evidence schema")
+        if not isinstance(artifacts,list) or not all(isinstance(x,str) for x in artifacts): raise ValueError("invalid artifact schema")
+        normalized=[]
+        if not isinstance(findings,list): raise ValueError("invalid findings schema")
+        for item in findings:
+            if not isinstance(item,dict): raise ValueError("invalid finding")
+            normalized.append({"severity":item.get("severity"),"code":item.get("code","finding"),"message":item.get("message")})
+        code={"implement":"completed","verify":"verified","review":"clean"}.get(stage,"unknown") if status=="passed" else "requires-repair"
+        return StageOutcome(stage=stage,status=status,summary=code,evidence=evidence,artifacts=artifacts,findings=normalized)
 
     def advance(self, task_id: str) -> TaskState:
         if self._lease_owner: self.store.renew_lease(task_id, self._lease_owner, 600)
@@ -151,6 +163,11 @@ class Orchestrator:
                 if task.spec.visual_check == "required"
                 else TaskState.APPROVAL
             )
+            if target is TaskState.WAITING_FOR_VISUAL_APPROVAL: self.store.request_approval(task_id,"visual")
+            else:
+                self.store.request_approval(task_id,"outcome")
+                meta=self.store.workspace(task_id)
+                if meta: self.store.request_approval(task_id,"merge",{"repo":meta["repo"],"task_id":task_id,"branch":meta["branch"]})
             return self.store.transition(task_id, state, target, "review-passed").state
         raise RuntimeError(f"unsupported state: {state.value}")
 
@@ -162,6 +179,12 @@ class Orchestrator:
                 if state in BLOCKED_STATES:
                     return state
             raise RuntimeError("workflow did not reach a blocked state within 100 transitions")
+        except Exception as error:
+            task=self.store.load(task_id)
+            if task.state not in BLOCKED_STATES:
+                self.store.record_outcome(task_id,StageOutcome(stage="setup",status="failed",summary="execution-failed",diagnostic=type(error).__name__))
+                self.store.transition(task_id,task.state,TaskState.FAILED_RECOVERABLE,"execution-failed")
+            raise
         finally: self.store.release_lease(task_id, owner); self._lease_owner=None
 
     def approve(self, task_id: str, action: str) -> TaskState:

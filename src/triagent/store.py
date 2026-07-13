@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+import os
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -85,6 +87,9 @@ class TaskStore:
                     if "duplicate column name" not in str(error).lower(): raise
             connection.execute("CREATE TABLE IF NOT EXISTS agent_calls(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, status TEXT NOT NULL, estimated_usd REAL, actual_usd REAL, diagnostic TEXT)")
             connection.execute("CREATE TABLE IF NOT EXISTS stage_outcomes(task_id TEXT NOT NULL, stage TEXT NOT NULL, outcome_json TEXT NOT NULL, PRIMARY KEY(task_id, stage))")
+            connection.execute("CREATE TABLE IF NOT EXISTS workspace_meta(task_id TEXT PRIMARY KEY, repo TEXT NOT NULL, base_commit TEXT NOT NULL, branch TEXT NOT NULL)")
+            connection.execute("CREATE TABLE IF NOT EXISTS approval_records(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action))")
+            connection.execute("CREATE TABLE IF NOT EXISTS approval_requests(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action))")
 
     def create_task(self, spec: TaskSpec) -> StoredTask:
         task_id = str(uuid.uuid4())
@@ -152,7 +157,29 @@ class TaskStore:
             if cursor.rowcount != 1: raise StateConflict("call is not pending")
             connection.execute(f"UPDATE task_runtime SET {column}={column}+1, usd_spent=usd_spent+? WHERE task_id=?", (actual_usd, task_id))
     def complete_agent_call(self, task_id: str, call_id: str, actual_usd: float = 0.0): self._finish_call(task_id, call_id, "completed", actual_usd)
-    def interrupt_agent_call(self, task_id: str, call_id: str, diagnostic: str): self._finish_call(task_id, call_id, "interrupted", 0.0, diagnostic)
+    def interrupt_agent_call(self, task_id: str, call_id: str, diagnostic: str, actual_usd: float | None = None):
+        with self._connect() as connection: row=connection.execute("SELECT estimated_usd FROM agent_calls WHERE id=? AND task_id=?",(call_id,task_id)).fetchone()
+        if row is None: raise StateConflict("call is not pending")
+        self._finish_call(task_id,call_id,"interrupted",row[0] if actual_usd is None else actual_usd,diagnostic[:200])
+
+    def finalize_overrun_and_pause(self, task_id: str, call_id: str, actual_usd: float, expected: TaskState) -> None:
+        now=datetime.now(UTC).isoformat(); connection=self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            call=connection.execute("SELECT estimated_usd FROM agent_calls WHERE id=? AND task_id=? AND status='started'",(call_id,task_id)).fetchone()
+            task=connection.execute("SELECT state FROM tasks WHERE id=?",(task_id,)).fetchone()
+            if call is None or task is None or task[0] != expected.value: raise StateConflict("overrun finalization conflict")
+            connection.execute("UPDATE agent_calls SET status='overrun',actual_usd=?,diagnostic='actual cost exceeded reservation' WHERE id=?",(actual_usd,call_id))
+            connection.execute("UPDATE task_runtime SET interrupted_calls=interrupted_calls+1,usd_spent=usd_spent+? WHERE task_id=?",(actual_usd,task_id))
+            connection.execute("UPDATE tasks SET state=?,updated_at=? WHERE id=?",(TaskState.PAUSED_BUDGET.value,now,task_id)); connection.commit()
+        except Exception: connection.rollback(); raise
+        finally: connection.close()
+        layout=RunLayout(self.runs_root/task_id); layout.write_state(TaskState.PAUSED_BUDGET); layout.append_event({"at":now,"event":"cost-overrun","state":TaskState.PAUSED_BUDGET.value})
+
+    def set_workspace(self, task_id: str, repo: str, base_commit: str, branch: str) -> None:
+        with self._connect() as connection: connection.execute("INSERT OR REPLACE INTO workspace_meta VALUES(?,?,?,?)",(task_id,repo,base_commit,branch))
+    def workspace(self, task_id: str):
+        with self._connect() as connection: return connection.execute("SELECT * FROM workspace_meta WHERE task_id=?",(task_id,)).fetchone()
 
     def acquire_lease(self, task_id: str, owner: str, seconds: float) -> None:
         import time
@@ -172,12 +199,15 @@ class TaskStore:
             if cursor.rowcount != 1: raise LeaseConflict("controller lease lost")
 
     def record_outcome(self, task_id: str, outcome: StageOutcome) -> None:
-        with self._connect() as connection: connection.execute("INSERT OR REPLACE INTO stage_outcomes VALUES(?,?,?)", (task_id, outcome.stage, outcome.model_dump_json()))
+        from triagent.adapters._cli import sanitize
+        secrets=tuple(value for key,value in os.environ.items() if value and re.search(r"(?i)(api[_-]?key|token|secret|password|credential)",key))
+        cleaned=StageOutcome.model_validate(sanitize(outcome.model_dump(mode="json"),secrets))
+        with self._connect() as connection: connection.execute("INSERT OR REPLACE INTO stage_outcomes VALUES(?,?,?)", (task_id, cleaned.stage, cleaned.model_dump_json()))
     def outcomes(self, task_id: str) -> dict[str, StageOutcome]:
         with self._connect() as connection: rows=connection.execute("SELECT * FROM stage_outcomes WHERE task_id=?", (task_id,)).fetchall()
         return {r["stage"]: StageOutcome.model_validate_json(r["outcome_json"]) for r in rows}
     def fail_setup(self, task_id: str, diagnostic: str, preserved_resources: list[str] | None = None) -> None:
-        self.record_outcome(task_id, StageOutcome(stage="setup", status="failed", summary=diagnostic[:1000], evidence=preserved_resources or []))
+        self.record_outcome(task_id, StageOutcome(stage="setup", status="failed", summary="setup-failed", diagnostic=diagnostic[:500], evidence=preserved_resources or []))
         self.transition(task_id, TaskState.SPEC, TaskState.FAILED_FINAL, "setup-failed")
 
     def approve_and_transition(self, task_id: str, action: str, expected: TaskState, target: TaskState) -> None:
@@ -215,14 +245,25 @@ class TaskStore:
                 raise KeyError(task_id)
         return self.runtime(task_id)
 
-    def record_approval(self, task_id: str, approval: str) -> TaskRuntime:
+    def record_approval(self, task_id: str, approval: str, resource: dict[str,str] | None = None) -> TaskRuntime:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row=connection.execute("SELECT approvals_json FROM task_runtime WHERE task_id=?", (task_id,)).fetchone()
             if row is None: raise KeyError(task_id)
             approvals=sorted(set(json.loads(row[0])) | {approval})
             connection.execute("UPDATE task_runtime SET approvals_json=? WHERE task_id=?", (json.dumps(approvals), task_id))
+            connection.execute("INSERT OR REPLACE INTO approval_records VALUES(?,?,?)",(task_id,approval,json.dumps(resource or {},sort_keys=True)))
         return self.runtime(task_id)
+
+    def approval_resource(self, task_id: str, action: str) -> dict[str,str] | None:
+        with self._connect() as connection: row=connection.execute("SELECT resource_json FROM approval_records WHERE task_id=? AND action=?",(task_id,action)).fetchone()
+        return json.loads(row[0]) if row else None
+    def request_approval(self, task_id: str, action: str, resource: dict[str,str] | None = None) -> None:
+        with self._connect() as connection: connection.execute("INSERT OR REPLACE INTO approval_requests VALUES(?,?,?)",(task_id,action,json.dumps(resource or {},sort_keys=True)))
+    def outstanding_approvals(self, task_id: str) -> list[str]:
+        with self._connect() as connection:
+            rows=connection.execute("SELECT r.action FROM approval_requests r LEFT JOIN approval_records a ON a.task_id=r.task_id AND a.action=r.action AND a.resource_json=r.resource_json WHERE r.task_id=? AND a.action IS NULL ORDER BY r.action",(task_id,)).fetchall()
+        return [r[0] for r in rows]
 
     def transition(
         self,

@@ -171,7 +171,7 @@ def test_cursor_uses_wsl_argv_and_does_not_interpolate_prompt(agent_request: Age
     argv = runner.calls[0][0]
     prompt = agent_request.task_file.read_text(encoding="utf-8")
     assert argv[:5] == ["wsl.exe", "--distribution", "Ubuntu-24.04", "--exec", "bash"]
-    assert argv[-1] == prompt
+    assert argv[-1] == f"TRIAGENT_INPUT_V1\nTASK\n{prompt}\nHANDOFF\n"
     assert "$(touch nope)" not in argv[6]
     assert result.status is AgentStatus.SUCCEEDED
 
@@ -295,13 +295,13 @@ def test_deepseek_is_available_when_all_gates_pass(tmp_path: Path) -> None:
         completed('{"models":["deepseek/deepseek-chat"]}'),
         completed("ignored"),
     )
-    caps = DeepSeekAdapter(runner=runner, enabled=True, billing_confirmed=True, probe_dir=tmp_path).capabilities()
+    caps = DeepSeekAdapter(runner=runner, enabled=True, billing_confirmed=True, live_confirmed=True, probe_dir=tmp_path).capabilities()
     assert caps.available is True
 
 
 def test_deepseek_self_claimed_evidence_without_sentinel_file_fails(tmp_path: Path) -> None:
     runner = FakeRunner(completed("opencode 1"), completed('{"reachable":true}'), completed('{"models":["deepseek/deepseek-chat"]}'), completed('{"summary":"claimed success"}'))
-    caps = DeepSeekAdapter(runner=runner, enabled=True, billing_confirmed=True, probe_dir=tmp_path).capabilities()
+    caps = DeepSeekAdapter(runner=runner, enabled=True, billing_confirmed=True, live_confirmed=True, probe_dir=tmp_path).capabilities()
     assert caps.agent_tool_smoke_test is False
     assert caps.available is False
 
