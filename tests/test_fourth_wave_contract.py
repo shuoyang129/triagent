@@ -12,9 +12,10 @@ from triagent.orchestrator import Orchestrator
 from triagent.store import BudgetExceeded,TaskStore
 
 class Runner:
-    def __init__(self,*outputs): self.outputs=list(outputs); self.calls=[]; self.inputs=[]
+    def __init__(self,*outputs,edit_worktree=False): self.outputs=list(outputs); self.calls=[]; self.inputs=[]; self.edit_worktree=edit_worktree
     def run(self,argv,cwd,timeout,env,stdin=None):
         self.calls.append(list(argv))
+        if self.edit_worktree:(cwd/"actual.txt").write_bytes(b"actual\n")
         if stdin is not None:self.inputs.append(stdin.encode())
         elif "-p" in argv:self.inputs.append(Path(argv[-1].rsplit(": ",1)[1]).read_bytes())
         return self.outputs.pop(0)
@@ -27,7 +28,7 @@ def test_actual_real_adapter_parsers_orchestrate_to_approval(tmp_path):
     repo=tmp_path/"repo"; init_repo(repo); store=TaskStore(tmp_path/"data")
     task=store.create_task(TaskSpec(goal="x",scope=["x"],acceptance=["x"],budget=Budget(max_usd=3)))
     dest=store.runs_root/task.id/"worktree"; dest.rmdir(); ws=GitWorkspace.create(repo,task.id,destination=dest); store.set_workspace(task.id,str(repo),ws.base_commit,f"triagent/{task.id}")
-    nested=json.dumps({"status":"passed","evidence":["implemented"],"artifacts":[],"changed_paths":[]}); cursor_runner=Runner(ProcessResult(0,json.dumps({"type":"result","subtype":"success","is_error":False,"result":nested,"total_cost_usd":.2}),"",False))
+    nested=json.dumps({"status":"passed","evidence":["implemented"],"artifacts":[],"changed_paths":[]}); cursor_runner=Runner(ProcessResult(0,json.dumps({"type":"result","subtype":"success","is_error":False,"result":nested,"total_cost_usd":.2}),"",False),edit_worktree=True)
     codex_event=json.dumps({"type":"item.completed","item":{"type":"agent_message","text":json.dumps({"status":"passed","evidence":["tests"],"artifacts":[]})}})
     codex_runner=Runner(ProcessResult(0,codex_event,"",False))
     review={"status":"passed","evidence":["independent"],"artifacts":[],"findings":[],"actual_usd":.1}
