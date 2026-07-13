@@ -152,11 +152,9 @@ def test_pruning_uses_durable_task_approval(tmp_path):
     repo=tmp_path/"repo"; repo.mkdir(); subprocess.run(["git","init","-q"],cwd=repo,check=True)
     subprocess.run(["git","config","user.email","x@y"],cwd=repo,check=True); subprocess.run(["git","config","user.name","x"],cwd=repo,check=True)
     (repo/"a").write_text("a",encoding="utf-8"); subprocess.run(["git","add","a"],cwd=repo,check=True); subprocess.run(["git","commit","-qm","a"],cwd=repo,check=True)
-    ws=GitWorkspace.create(repo,"prune"); ws.cleanup(); store=TaskStore(tmp_path/"data"); task=store.create_task(spec())
+    store=TaskStore(tmp_path/"data"); task=store.create_task(spec()); destination=store.runs_root/task.id/"worktree"; destination.rmdir()
+    ws=GitWorkspace.create(repo,task.id,destination=destination); store.set_workspace(task.id,str(repo),ws.base_commit,f"triagent/{task.id}")
+    store.materialize_reviewed_commit(task.id); bound=store.approval_manifest(task.id)
+    ws.cleanup()
     with pytest.raises(PermissionError): ws.prune_branch(store=store, task_id=task.id)
-    bound={"repo":str(ws.repo),"task_id":ws.task_id,"branch":f"triagent/{ws.task_id}"}
-    task=store.create_task(spec()) if task.id != ws.task_id else task
-    # Approval is bound to the workspace identifier; use a store task with that exact id contract.
-    with store._connect() as c:
-        c.execute("UPDATE tasks SET id=? WHERE id=?",(ws.task_id,task.id)); c.execute("UPDATE task_runtime SET task_id=? WHERE task_id=?",(ws.task_id,task.id))
-    store.request_approval(ws.task_id,"prune-branch",bound); store.approve_requested(ws.task_id,"prune-branch"); ws.prune_branch(store=store, task_id=ws.task_id)
+    store.request_approval(task.id,"prune-branch",bound); store.approve_requested(task.id,"prune-branch"); ws.prune_branch(store=store, task_id=task.id)

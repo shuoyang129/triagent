@@ -129,9 +129,11 @@ class GitWorkspace:
         record=store.approval_resource(task_id,"prune-branch") if store is not None and task_id is not None else None
         if store is None or task_id is None or task_id != self.task_id or not record or any(record.get(k)!=v for k,v in expected.items()) or not record.get("resource_version"):
             raise PermissionError("branch pruning requires durable prune-branch approval")
+        store.consume_approval(task_id,"prune-branch")
         if self.path.exists():
             raise RuntimeError("clean up the worktree before pruning its preservation branch")
         _git(self.repo, "branch", "-D", f"triagent/{self.task_id}")
+        store.delete_candidate_ref(task_id)
 
 
 def _git(cwd: Path, *args: str) -> str:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import base64
 import subprocess
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from triagent.adapters.base import AgentRequest, AgentRole, AgentStatus
 from triagent.adapters.process import ProcessResult
 from triagent.domain import RiskLevel, StageOutcome, TaskSpec, TaskState
 from triagent.store import TaskStore
+
+VALID_PNG=base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
 
 
 def init_repo(path: Path) -> str:
@@ -39,7 +42,7 @@ def visual_store(tmp_path: Path, artifact: str | None) -> tuple[TaskStore, str, 
     (work / "change.txt").write_text("reviewed", encoding="utf-8")
     artifacts = [] if artifact is None else [artifact]
     if artifact == "visual.png":
-        (work / artifact).write_bytes(b"\x89PNG\r\nreviewed-bytes")
+        (work / artifact).write_bytes(VALID_PNG)
     store.record_outcome(task.id, StageOutcome(stage="review", status="passed", summary="clean", artifacts=artifacts))
     store.set_workspace(task.id, str(repo), base, f"triagent/{task.id}")
     return store, task.id, work

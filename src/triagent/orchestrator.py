@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 import uuid
 import json
-import base64,hashlib
 
 from triagent.adapters.base import AgentAdapter, AgentRequest, AgentRole, AgentStatus
 from triagent.domain import ReviewSeverity, RiskLevel, StageOutcome, TaskState
@@ -99,13 +98,8 @@ class Orchestrator:
             diff=""
         else:
           try:
-            import subprocess
-            base=meta["base_commit"] if meta else "HEAD"
-            diff=subprocess.run(["git","diff","--binary",base],cwd=work,check=True,capture_output=True,text=True).stdout
-            untracked=subprocess.run(["git","ls-files","--others","--exclude-standard"],cwd=work,check=True,capture_output=True,text=True).stdout.splitlines()
-            for name in untracked:
-                data=(work/name).read_bytes(); record={"path":name,"size":len(data),"sha256":hashlib.sha256(data).hexdigest(),"base64":base64.b64encode(data).decode("ascii")}
-                diff += "\nUNTRACKED_BINARY_JSON "+json.dumps(record,sort_keys=True,separators=(",",":"))+"\n"
+            if meta is None or not meta["reviewed_commit"]:raise ValueError("candidate missing")
+            diff=self.store._git_plumbing(work,["diff","--binary",meta["base_commit"],meta["reviewed_commit"]]).decode("utf-8","replace")
           except Exception as error: raise RuntimeError("canonical handoff generation failed") from error
         payload={"task_spec":task.spec.model_dump(mode="json"),"final_diff":diff,"tests":tests or [],"artifacts":[],"rollback":"preserve task branch; remove worktree only after approval","completed":["implementation"]}
         path=run/"handoff.json"; path.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8"); return path
@@ -135,6 +129,7 @@ class Orchestrator:
         if state is TaskState.SPEC:
             return self.store.transition(task_id, state, TaskState.IMPLEMENT, "spec-accepted").state
         if state in {TaskState.IMPLEMENT, TaskState.REPAIR}:
+            if state is TaskState.REPAIR and self.store.workspace(task_id) is not None:self.store.restore_candidate_worktree(task_id)
             result = self._call(
                 task_id,
                 state,
@@ -143,7 +138,7 @@ class Orchestrator:
             )
             if result is None:
                 return self.store.load(task_id).state
-            self.store.record_outcome(task_id, self._outcome("implement", result)); self._write_handoff(task_id)
+            self.store.record_outcome(task_id, self._outcome("implement", result)); self.store.materialize_reviewed_commit(task_id); self._write_handoff(task_id)
             return self.store.transition(task_id, state, TaskState.VERIFY, "implementation-complete").state
         if state is TaskState.VERIFY:
             result = self._call(
@@ -154,7 +149,9 @@ class Orchestrator:
             )
             if result is None:
                 return self.store.load(task_id).state
-            self.store.record_outcome(task_id, self._outcome("verify", result)); self._write_handoff(task_id,tests=self.store.outcomes(task_id)["verify"].evidence)
+            self.store.record_outcome(task_id, self._outcome("verify", result))
+            if self.store.workspace(task_id) is not None:self.store.restore_candidate_worktree(task_id)
+            self._write_handoff(task_id,tests=self.store.outcomes(task_id)["verify"].evidence)
             return self.store.transition(task_id, state, TaskState.REVIEW, "verification-complete").state
         if state is TaskState.REVIEW:
             result = self._call(
@@ -184,7 +181,6 @@ class Orchestrator:
                 if task.spec.visual_check == "required"
                 else TaskState.APPROVAL
             )
-            self.store.materialize_reviewed_commit(task_id)
             manifest=self.store.approval_manifest(task_id)
             if target is TaskState.WAITING_FOR_VISUAL_APPROVAL: self.store.request_approval(task_id,"visual",manifest)
             else:
@@ -217,5 +213,6 @@ class Orchestrator:
             return TaskState.APPROVAL
         if task.state is TaskState.APPROVAL and action in {"outcome", "merge", "deploy", "destructive", "prune-branch", "live", "billing"}:
             self.store.approve_requested(task_id, action)
+            if action in {"outcome","merge","prune-branch"}:self.store.consume_approval(task_id,action)
             return task.state
         raise ValueError(f"approval {action!r} is invalid for state {task.state.value}")

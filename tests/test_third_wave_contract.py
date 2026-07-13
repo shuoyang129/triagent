@@ -84,8 +84,8 @@ def test_handoff_diff_uses_persisted_base_and_all_change_categories(tmp_path):
     (dest/"committed.txt").write_text("committed-change\n",encoding="utf-8"); subprocess.run(["git","add","committed.txt"],cwd=dest,check=True); subprocess.run(["git","commit","-qm","change"],cwd=dest,check=True)
     (dest/"staged.txt").write_text("staged-change\n",encoding="utf-8"); subprocess.run(["git","add","staged.txt"],cwd=dest,check=True)
     (dest/"unstaged.txt").write_text("unstaged-change\n",encoding="utf-8"); (dest/"untracked.txt").write_text("untracked-change\n",encoding="utf-8")
+    store.materialize_reviewed_commit(task.id)
     path=Orchestrator(store,FakeAgent([]),FakeAgent([]),FakeAgent([]))._write_handoff(task.id)
     diff=json.loads(path.read_text(encoding="utf-8"))["final_diff"]
-    for marker in ("committed-change","staged-change","unstaged-change"): assert marker in diff
-    record=json.loads(diff.split("UNTRACKED_BINARY_JSON ",1)[1]); import base64
-    assert base64.b64decode(record["base64"]) == (dest/"untracked.txt").read_bytes()
+    for marker in ("committed-change","staged-change","unstaged-change","untracked-change"): assert marker in diff
+    assert "+++ b/untracked.txt" in diff
