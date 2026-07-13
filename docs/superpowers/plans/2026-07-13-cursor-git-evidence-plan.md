@@ -20,7 +20,7 @@
 
 ---
 
-### Task 1: Convert Cursor output handling to transport-only success
+### Task 10: Convert Cursor output handling to transport-only success
 
 **Files:**
 - Modify: `src/triagent/adapters/_cli.py:295-312`
@@ -121,7 +121,7 @@ Run:
 
 Expected: all non-live tests pass; only the existing explicitly selected live tests are skipped.
 
-- [ ] **Step 5: Commit Task 1**
+- [ ] **Step 5: Commit Task 10**
 
 ```powershell
 git add -- src/triagent/adapters/_cli.py tests/test_cli_capabilities.py
@@ -130,7 +130,7 @@ git commit -m "fix: use transport success for Cursor results"
 
 ---
 
-### Task 2: Add an opt-in non-empty candidate requirement
+### Task 11: Add an opt-in non-empty candidate requirement
 
 **Files:**
 - Modify: `src/triagent/store.py:282-429`
@@ -222,7 +222,7 @@ Run:
 
 Expected: all tests pass, with only platform-specific symlink tests skipped on Windows.
 
-- [ ] **Step 5: Commit Task 2**
+- [ ] **Step 5: Commit Task 11**
 
 ```powershell
 git add -- src/triagent/store.py tests/test_tenth_wave_contract.py
@@ -231,7 +231,7 @@ git commit -m "fix: support required Git candidate changes"
 
 ---
 
-### Task 3: Route concrete Cursor implementations through Git-derived evidence
+### Task 12: Route concrete Cursor implementations through Git-derived evidence
 
 **Files:**
 - Modify: `src/triagent/orchestrator.py:138-151`
@@ -381,7 +381,7 @@ def test_cursor_no_change_stops_before_verification(tmp_path: Path) -> None:
     assert reviewer.requests == []
 ```
 
-- [ ] **Step 3: Run the new integration tests and verify both fail at the missing orchestration behavior**
+- [ ] **Step 3: Run the new integration tests and verify the missing no-change orchestration behavior fails**
 
 Run:
 
@@ -389,7 +389,7 @@ Run:
 & 'C:\Users\yangs\AppData\Local\Programs\Python\Python312\python.exe' -m pytest tests\test_cursor_git_evidence.py -q
 ```
 
-Expected: the changed-worktree test fails because the model-supplied path list is still used or Cursor free text is rejected; the no-change test fails because `cursor-no-worktree-change` is not recorded.
+Expected: after Tasks 10 and 11, the changed-worktree test may already pass because the existing path fallback derives changes from Git; the no-change test fails because `cursor-no-worktree-change` is not recorded.
 
 - [ ] **Step 4: Materialize Cursor candidates before recording implementation success**
 
@@ -438,7 +438,7 @@ Run:
 
 Expected: all tests pass.
 
-- [ ] **Step 6: Commit Task 3**
+- [ ] **Step 6: Commit Task 12**
 
 ```powershell
 git add -- src/triagent/orchestrator.py tests/test_cursor_git_evidence.py
@@ -447,14 +447,14 @@ git commit -m "fix: derive Cursor implementation evidence from Git"
 
 ---
 
-### Task 4: Verify the complete system and run one bounded live smoke
+### Task 13: Verify the complete system and run one bounded live smoke
 
 **Files:**
 - Verify only: all repository files
 - Runtime evidence only: the task directory selected from the CLI's emitted UUID under `D:\workspace\runs\live-smoke\runs\`
 
 **Interfaces:**
-- Consumes: Tasks 1-3 and `profiles/windows.example.toml`.
+- Consumes: Tasks 10-12 and `profiles/windows.example.toml`.
 - Produces: automated-test evidence and one persisted live task showing the reached provider stages.
 
 - [ ] **Step 1: Run the full automated suite**
