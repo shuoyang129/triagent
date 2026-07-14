@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from triagent.adapters.base import AgentResult, AgentStatus
 from triagent.adapters.fake import FakeAgent
 from triagent.domain import Budget, RiskLevel, TaskSpec, TaskState
@@ -84,11 +86,17 @@ def test_runtime_counters_survive_store_reopen(tmp_path: Path) -> None:
     assert reopened.runtime(task.id).agent_calls == 1
 
 
-def test_failed_agent_call_persists_only_allowlisted_diagnostic_code(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "diagnostic_code",
+    ["cursor-result-non-json", "json-malformed", "json-non-object"],
+)
+def test_failed_agent_call_persists_only_allowlisted_diagnostic_code(
+    tmp_path: Path, diagnostic_code: str
+) -> None:
     failed = AgentResult(
         status=AgentStatus.INVALID_OUTPUT,
         summary="vendor text must not be persisted",
-        data={"diagnostic_code": "cursor-result-non-json"},
+        data={"diagnostic_code": diagnostic_code},
     )
     orchestrator, store = make_orchestrator(
         tmp_path,
@@ -104,4 +112,4 @@ def test_failed_agent_call_persists_only_allowlisted_diagnostic_code(tmp_path: P
             "SELECT diagnostic FROM agent_calls WHERE task_id = ?",
             (task.id,),
         ).fetchone()
-    assert row["diagnostic"] == "cursor-result-non-json"
+    assert row["diagnostic"] == diagnostic_code

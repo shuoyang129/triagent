@@ -19,6 +19,8 @@ _SAFE_DIAGNOSTICS=frozenset({
     "canonical-output-invalid",
     "cursor-envelope-invalid",
     "cursor-result-non-json",
+    "json-malformed",
+    "json-non-object",
     "transport-acl-setup-failed",
     "transport-acl-verification-failed",
     "transport-cleanup-failed",
