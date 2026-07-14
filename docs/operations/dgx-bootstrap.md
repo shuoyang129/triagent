@@ -24,6 +24,9 @@ bash scripts/install-triagent-dgx.sh --apply
 The installer creates only the `triagent` Python 3.12 environment and the
 `triagent-runs` and `projects` directories. It does not modify `base`,
 `isaaclab`, `sonic-g1`, system Python, NVIDIA, Docker, or zsh.
+If the environment has no `node` executable, the installer links an existing
+NVM or `~/.local/opt` Node runtime into `triagent/bin` so the Codex CLI can
+start; it does not download Node or activate NVM globally.
 
 ## Controller
 

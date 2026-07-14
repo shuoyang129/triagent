@@ -61,6 +61,14 @@ def test_dgx_installer_is_explicit_and_avoids_system_installation() -> None:
     assert "conda install" not in text
 
 
+def test_dgx_installer_reuses_existing_node_inside_isolated_environment() -> None:
+    text = INSTALLER.read_text(encoding="utf-8")
+    assert '"$HOME"/.nvm/versions/node/*/bin/node' in text
+    assert '"$HOME"/.local/opt/node-*/bin/node' in text
+    assert 'ln -s "$candidate" "$env_path/bin/node"' in text
+    assert "Required Node runtime missing" in text
+
+
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is unavailable")
 def test_dgx_scripts_have_valid_bash_syntax() -> None:
     for script in (BOOTSTRAP, INSTALLER):
