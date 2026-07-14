@@ -394,6 +394,15 @@ def test_process_runner_uses_safe_baseline_and_does_not_leak_unrelated_environme
     assert output["TRIAGENT_UNRELATED_SECRET"] is None
 
 
+def test_process_runner_supplies_temp_when_parent_has_no_temp_variables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TEMP", raising=False)
+    monkeypatch.delenv("TMP", raising=False)
+    code = "import json,os; print(json.dumps({'TEMP':os.environ.get('TEMP'),'TMP':os.environ.get('TMP')}))"
+    result = ProcessRunner().run([sys.executable, "-c", code], tmp_path, 10, {})
+    output = json.loads(result.stdout)
+    assert output.get("TEMP") or output.get("TMP")
+
+
 @pytest.mark.live_cli
 def test_live_codex_capabilities_only_when_selected(request: pytest.FixtureRequest) -> None:
     if not request.config.getoption("-m") or "live_cli" not in request.config.getoption("-m"):

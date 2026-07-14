@@ -7,10 +7,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
 
+from triagent.adapters import _cli as cli_support
 from triagent.adapters._cli import _windows_acl
 from triagent.adapters.antigravity import AntigravityAdapter
 from triagent.adapters.base import AgentRequest, AgentRole, AgentStatus
@@ -91,6 +93,18 @@ def test_antigravity_secures_directory_before_payload_write(tmp_path):
     result = AntigravityAdapter(runner=runner, acl_verifier=verify).run(request(tmp_path, AgentRole.REVIEWER))
     assert result.status is AgentStatus.SUCCEEDED
     assert order == ["directory", "file"]
+
+
+def test_antigravity_injected_acl_contract_is_platform_independent(tmp_path, monkeypatch):
+    checked = []
+    runner = CaptureRunner(ProcessResult(0, json.dumps({"status": "passed", "evidence": [], "artifacts": [], "findings": []}), "", False))
+    adapter = AntigravityAdapter(runner=runner, acl_verifier=lambda directory, file: checked.append((directory, file)) or file is None)
+    monkeypatch.setattr(cli_support, "os", SimpleNamespace(name="posix"))
+
+    result = adapter.run(request(tmp_path, AgentRole.REVIEWER))
+    assert result.status is AgentStatus.FAILED
+    assert [file is None for _, file in checked] == [True, False]
+    assert runner.calls == []
 
 
 def test_cursor_paid_probe_uses_documented_print_json_envelope_argv(tmp_path):

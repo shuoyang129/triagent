@@ -157,6 +157,13 @@ def _windows_acl(directory:Path,file:Path|None)->bool:
     if is_directory:
         return all({part.strip() for part in r.get("inheritance","").split(",")}=={"ContainerInherit","ObjectInherit"} and r.get("propagation")=="None" for r in rules)
     return all(r.get("inheritance")=="None" and r.get("propagation")=="None" for r in rules)
+
+def _posix_permissions(directory:Path,file:Path|None)->bool:
+    target=file or directory
+    expected=0o600 if file is not None else 0o700
+    try:return (target.stat().st_mode&0o777)==expected
+    except OSError:return False
+
 @contextmanager
 def external_restricted_input(request,acl_verifier=None):
     payload,error=read_prompt(request)
@@ -165,13 +172,13 @@ def external_restricted_input(request,acl_verifier=None):
     try:
         if os.name=="nt":
             verifier=acl_verifier or _windows_acl
-            if not verifier(directory,None):raise TransportSecurityError("transport-acl-setup-failed")
-            file.touch(exist_ok=False)
-            if not verifier(directory,file):raise TransportSecurityError("transport-acl-verification-failed")
         else:
             directory.chmod(0o700)
-            file.touch(mode=0o600,exist_ok=False); file.chmod(0o600)
-            if (directory.stat().st_mode&0o777)!=0o700 or (file.stat().st_mode&0o777)!=0o600:raise TransportSecurityError("transport-acl-verification-failed")
+            verifier=acl_verifier or _posix_permissions
+        if not verifier(directory,None):raise TransportSecurityError("transport-acl-setup-failed")
+        file.touch(mode=0o600,exist_ok=False)
+        if os.name!="nt":file.chmod(0o600)
+        if not verifier(directory,file):raise TransportSecurityError("transport-acl-verification-failed")
         file.write_bytes(payload.encode("utf-8"))
         yield file,None
     finally:

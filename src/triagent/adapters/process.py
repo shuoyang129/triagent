@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -39,6 +40,7 @@ class ProcessRunner:
             "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL",
         )
         environment = {name: os.environ[name] for name in baseline_names if os.environ.get(name)}
+        environment.setdefault("TMP", tempfile.gettempdir())
         environment.update({key: value for key, value in env_allowlist.items() if value is not None})
         try:
             completed = subprocess.run(
