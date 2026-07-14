@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
@@ -35,6 +36,7 @@ def test_real_host_capability_contract_is_explicitly_onsite() -> None:
     marks = getattr(test_generated_capability_file_matches_contract, "pytestmark", [])
     assert any(mark.name == "onsite" for mark in marks)
 
+@pytest.mark.skipif(shutil.which("powershell") is None, reason="Windows PowerShell is unavailable")
 def test_native_probe_contract_checks_nonzero_last_exit_code() -> None:
     script = Path("scripts/bootstrap-windows.ps1").read_text(encoding="utf-8")
     assert "$LASTEXITCODE" in script and "-eq 0" in script

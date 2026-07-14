@@ -1,0 +1,43 @@
+[host]
+name = "spark-5643"
+platform = "ubuntu-24.04"
+hardware = "nvidia-dgx-spark"
+address = "spark"
+
+[paths]
+runs = "/home/ys/works/robots/triagent-runs"
+workspace = "/home/ys/works/robots/projects"
+python = "/home/ys/miniforge3/envs/triagent/bin/python"
+
+[capabilities]
+nvidia_gpu = true
+container_runtime = "nvidia-container-toolkit"
+robot_simulation = "isaac-lab"
+visualization = ["local-display", "webrtc"]
+background_execution = ["systemd-user", "tmux"]
+
+[agents.codex]
+command = ["/home/ys/.local/bin/codex"]
+estimated_usd = 1.0
+
+[agents.cursor]
+command = ["/home/ys/.local/bin/cursor-agent"]
+estimated_usd = 1.0
+
+[agents.antigravity]
+command = ["/home/ys/.local/bin/agy"]
+estimated_usd = 1.0
+
+[agents.opencode]
+enabled = false
+command = ["/home/ys/.local/bin/opencode"]
+estimated_usd = 1.0
+probe_estimated_usd = 0.25
+
+[budget]
+max_agent_calls = 20
+max_minutes = 60
+max_usd = 20.0
+cursor_saver_threshold = 0.70
+cursor_handoff_threshold = 0.90
+allow_paid_overage = false
