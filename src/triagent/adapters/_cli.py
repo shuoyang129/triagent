@@ -112,6 +112,22 @@ class CursorEnvelope(BaseModel):
     result: StrictStr
     total_cost_usd: float|None=Field(default=None,ge=0,allow_inf_nan=False,strict=True)
 
+_JSON_FENCE = re.compile(
+    r"\A\s*```(?:json)?\r?\n(?P<body>.*?)\r?\n```\s*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+
+def _decode_json_object(value: str) -> tuple[dict | None, str | None]:
+    match = _JSON_FENCE.fullmatch(value)
+    candidate = match.group("body") if match else value
+    try:
+        payload = json.loads(candidate)
+    except (json.JSONDecodeError, TypeError):
+        return None, "json-malformed"
+    if not isinstance(payload, dict):
+        return None, "json-non-object"
+    return payload, None
+
 class TransportSecurityError(RuntimeError):
     def __init__(self, code: str) -> None:
         self.code=code
@@ -284,6 +300,7 @@ def invoke_json(
     timeout: float,
     env: Mapping[str, str] | None = None,
     secret_values: Sequence[str] = (), role: AgentRole = AgentRole.IMPLEMENTER, stdin: str | None = None, cursor_envelope: bool = False,
+    allow_fenced_json: bool = False,
 ) -> AgentResult:
     try:
         process = runner.run(argv, cwd, timeout, env or {}, stdin=stdin)
@@ -297,12 +314,22 @@ def invoke_json(
         if auth_code or any(marker in diagnostic for marker in _AUTH_FAILURES):
             return AgentResult(status=AgentStatus.UNAVAILABLE, summary="CLI authentication or configuration is unavailable")
         return AgentResult(status=AgentStatus.FAILED, summary="CLI execution failed")
-    try:
-        payload = json.loads(process.stdout)
-    except (json.JSONDecodeError, TypeError):
-        return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="CLI returned malformed structured output")
-    if not isinstance(payload, dict):
-        return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="CLI returned invalid structured output")
+    if allow_fenced_json:
+        payload, diagnostic = _decode_json_object(process.stdout)
+        if diagnostic is not None:
+            return AgentResult(
+                status=AgentStatus.INVALID_OUTPUT,
+                summary="CLI returned invalid structured output",
+                data={"diagnostic_code": diagnostic},
+            )
+        assert payload is not None
+    else:
+        try:
+            payload = json.loads(process.stdout)
+        except (json.JSONDecodeError, TypeError):
+            return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="CLI returned malformed structured output")
+        if not isinstance(payload, dict):
+            return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="CLI returned invalid structured output")
     payload = sanitize(payload, secret_values)
     assert isinstance(payload, dict)
     actual=payload.get("actual_usd") if isinstance(payload.get("actual_usd"),(int,float)) and not isinstance(payload.get("actual_usd"),bool) and math.isfinite(payload.get("actual_usd")) else None

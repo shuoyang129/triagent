@@ -44,9 +44,10 @@ transport decoding.
 
 ## Implementation boundary
 
-Add one small transport-decoding helper in `triagent.adapters._cli` and use it
-from `invoke_json`, which is the Antigravity response path. Do not change the
-Codex JSONL parser, Cursor envelope contract, role schemas, prompt schema,
+Add one small transport-decoding helper in `triagent.adapters._cli`, expose it
+through an `invoke_json` opt-in that defaults to false, and enable the opt-in
+only from `AntigravityAdapter`. Do not change the Codex JSONL parser, Cursor
+envelope contract, DeepSeek parser behavior, role schemas, prompt schema,
 budgeting, approvals, or agent routing.
 
 ## Tests

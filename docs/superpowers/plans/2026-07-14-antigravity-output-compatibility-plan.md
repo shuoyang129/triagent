@@ -4,7 +4,7 @@
 
 **Goal:** Accept a single complete JSON Markdown fence from Antigravity while preserving strict canonical validation and privacy-safe failure diagnostics.
 
-**Architecture:** Add one transport decoder used only by the plain JSON response path in `triagent.adapters._cli`. It accepts raw JSON or one complete fence, returns only a JSON object, and emits categorical failure codes; the existing role-specific Pydantic models remain the canonical boundary. Allowlist the two new codes in the orchestrator so the persisted task audit distinguishes malformed JSON from a non-object response without storing vendor text.
+**Architecture:** Add one opt-in transport decoder in `triagent.adapters._cli` and enable it only from `AntigravityAdapter`. It accepts raw JSON or one complete fence, returns only a JSON object, and emits categorical failure codes; the existing role-specific Pydantic models remain the canonical boundary. Allowlist the two new codes in the orchestrator so the persisted task audit distinguishes malformed JSON from a non-object response without storing vendor text.
 
 **Tech Stack:** Python 3.12, Pydantic 2, pytest 9, Git, PowerShell locally, Ubuntu 24.04/aarch64 on DGX.
 
@@ -25,10 +25,11 @@
 **Files:**
 - Modify: `tests/test_cli_capabilities.py`
 - Modify: `src/triagent/adapters/_cli.py`
+- Modify: `src/triagent/adapters/antigravity.py`
 
 **Interfaces:**
 - Consumes: `ProcessResult.stdout: str` from the existing `invoke_json` path.
-- Produces: `_decode_json_object(value: str) -> tuple[dict | None, str | None]`, where the second item is `None`, `json-malformed`, or `json-non-object`.
+- Produces: `_decode_json_object(value: str) -> tuple[dict | None, str | None]`, where the second item is `None`, `json-malformed`, or `json-non-object`; `invoke_json(..., allow_fenced_json: bool = False)`; Antigravity is the only caller that passes true.
 
 - [ ] **Step 1: Add failing transport-shape tests**
 
@@ -64,6 +65,7 @@ def test_plain_json_transport_accepts_raw_or_one_complete_fence(tmp_path: Path, 
         tmp_path,
         1,
         role=AgentRole.REVIEWER,
+        allow_fenced_json=True,
     )
     assert result.status is AgentStatus.SUCCEEDED
     assert result.data["findings"] == []
@@ -79,19 +81,19 @@ def test_plain_json_transport_accepts_raw_or_one_complete_fence(tmp_path: Path, 
     ],
 )
 def test_plain_json_transport_rejects_noncanonical_wrapping(tmp_path: Path, stdout: str) -> None:
-    result = invoke_json(FakeRunner(completed(stdout)), ["agy"], tmp_path, 1, role=AgentRole.REVIEWER)
+    result = invoke_json(FakeRunner(completed(stdout)), ["agy"], tmp_path, 1, role=AgentRole.REVIEWER, allow_fenced_json=True)
     assert result.status is AgentStatus.INVALID_OUTPUT
     assert result.data == {"diagnostic_code": "json-malformed"}
 
 
 def test_plain_json_transport_rejects_non_object_json(tmp_path: Path) -> None:
-    result = invoke_json(FakeRunner(completed("[]")), ["agy"], tmp_path, 1, role=AgentRole.REVIEWER)
+    result = invoke_json(FakeRunner(completed("[]")), ["agy"], tmp_path, 1, role=AgentRole.REVIEWER, allow_fenced_json=True)
     assert result.status is AgentStatus.INVALID_OUTPUT
     assert result.data == {"diagnostic_code": "json-non-object"}
 
 
 def test_plain_json_transport_keeps_canonical_schema_strict(tmp_path: Path) -> None:
-    result = invoke_json(FakeRunner(completed("{}")), ["agy"], tmp_path, 1, role=AgentRole.REVIEWER)
+    result = invoke_json(FakeRunner(completed("{}")), ["agy"], tmp_path, 1, role=AgentRole.REVIEWER, allow_fenced_json=True)
     assert result.status is AgentStatus.INVALID_OUTPUT
     assert result.data == {"diagnostic_code": "canonical-output-invalid"}
 ```
@@ -133,20 +135,27 @@ def _decode_json_object(value: str) -> tuple[dict | None, str | None]:
     return payload, None
 ```
 
-Replace the initial parsing block in `invoke_json` with:
+Add `allow_fenced_json: bool = False` as the final `invoke_json` parameter. Use
+the decoder only when it is true; otherwise retain the existing direct
+`json.loads` and object check. In `AntigravityAdapter.run`, pass
+`allow_fenced_json=True`. The fenced branch is:
 
 ```python
-    payload, diagnostic = _decode_json_object(process.stdout)
-    if diagnostic is not None:
-        return AgentResult(
-            status=AgentStatus.INVALID_OUTPUT,
-            summary="CLI returned invalid structured output",
-            data={"diagnostic_code": diagnostic},
-        )
-    assert payload is not None
+    if allow_fenced_json:
+        payload, diagnostic = _decode_json_object(process.stdout)
+        if diagnostic is not None:
+            return AgentResult(
+                status=AgentStatus.INVALID_OUTPUT,
+                summary="CLI returned invalid structured output",
+                data={"diagnostic_code": diagnostic},
+            )
+        assert payload is not None
 ```
 
-Leave sanitization, Cursor envelope handling, `_canonical`, and actual-cost handling unchanged.
+Add a regression test proving the default path rejects a fenced payload, plus
+an adapter wiring test proving Antigravity enables it. Leave sanitization,
+Cursor envelope handling, DeepSeek parsing, `_canonical`, and actual-cost
+handling unchanged.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
@@ -172,7 +181,7 @@ Expected: zero failures; live tests remain skipped unless explicitly selected.
 - [ ] **Step 6: Commit the decoder**
 
 ```powershell
-git add src/triagent/adapters/_cli.py tests/test_cli_capabilities.py
+git add src/triagent/adapters/_cli.py src/triagent/adapters/antigravity.py tests/test_cli_capabilities.py docs/superpowers/specs/2026-07-14-antigravity-output-compatibility-design.md docs/superpowers/plans/2026-07-14-antigravity-output-compatibility-plan.md
 git commit -m "fix: accept strict fenced Antigravity JSON"
 ```
 

@@ -27,6 +27,6 @@ class AntigravityAdapter(AgentAdapter):
             with external_restricted_input(request,self._acl_verifier) as (path,error):
                 if error:return error
                 instruction=f"Read and follow the complete instructions in this local file: {path}"
-                return invoke_json(self._runner,[*self._command,"-p",instruction],request.workdir,request.timeout_seconds,self._env,self._secrets,request.role)
+                return invoke_json(self._runner,[*self._command,"-p",instruction],request.workdir,request.timeout_seconds,self._env,self._secrets,request.role,allow_fenced_json=True)
         except TransportSecurityError as error:
             return AgentResult(status=AgentStatus.FAILED,summary=error.code,data={"diagnostic_code":error.code})

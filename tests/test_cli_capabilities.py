@@ -9,6 +9,7 @@ import re
 import pytest
 
 from triagent.adapters.antigravity import AntigravityAdapter
+from triagent.adapters._cli import invoke_json
 from triagent.adapters.base import AgentRequest, AgentRole, AgentStatus
 from triagent.adapters.codex import CodexAdapter
 from triagent.adapters.cursor import CursorAdapter
@@ -63,6 +64,78 @@ def completed(stdout: str = "", returncode: int = 0, stderr: str = "") -> Proces
     return ProcessResult(returncode, stdout, stderr, False)
 
 
+def review_payload() -> dict:
+    return {
+        "status": "passed",
+        "evidence": [],
+        "artifacts": [],
+        "findings": [],
+    }
+
+
+@pytest.mark.parametrize(
+    "rendered",
+    [
+        lambda value: value,
+        lambda value: f"```json\n{value}\n```",
+        lambda value: f"```\n{value}\n```",
+        lambda value: f"```JSON\n{value}\n```",
+    ],
+)
+def test_plain_json_transport_accepts_raw_or_one_complete_fence(tmp_path: Path, rendered) -> None:
+    payload = json.dumps(review_payload())
+    result = invoke_json(
+        FakeRunner(completed(rendered(payload))),
+        ["agy"],
+        tmp_path,
+        1,
+        role=AgentRole.REVIEWER,
+        allow_fenced_json=True,
+    )
+    assert result.status is AgentStatus.SUCCEEDED
+    assert result.data["findings"] == []
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "not json",
+        'prefix\n```json\n{"status":"passed"}\n```',
+        '```json\n{"status":"passed"}\n```\ntrailing',
+        '```json\n{}\n```\n```json\n{}\n```',
+    ],
+)
+def test_plain_json_transport_rejects_noncanonical_wrapping(tmp_path: Path, stdout: str) -> None:
+    result = invoke_json(FakeRunner(completed(stdout)), ["agy"], tmp_path, 1, role=AgentRole.REVIEWER, allow_fenced_json=True)
+    assert result.status is AgentStatus.INVALID_OUTPUT
+    assert result.data == {"diagnostic_code": "json-malformed"}
+
+
+def test_plain_json_transport_rejects_non_object_json(tmp_path: Path) -> None:
+    result = invoke_json(FakeRunner(completed("[]")), ["agy"], tmp_path, 1, role=AgentRole.REVIEWER, allow_fenced_json=True)
+    assert result.status is AgentStatus.INVALID_OUTPUT
+    assert result.data == {"diagnostic_code": "json-non-object"}
+
+
+def test_plain_json_transport_keeps_canonical_schema_strict(tmp_path: Path) -> None:
+    result = invoke_json(FakeRunner(completed("{}")), ["agy"], tmp_path, 1, role=AgentRole.REVIEWER, allow_fenced_json=True)
+    assert result.status is AgentStatus.INVALID_OUTPUT
+    assert result.data == {"diagnostic_code": "canonical-output-invalid"}
+
+
+def test_fenced_json_transport_requires_explicit_adapter_opt_in(tmp_path: Path) -> None:
+    payload = json.dumps(review_payload())
+    result = invoke_json(
+        FakeRunner(completed(f"```json\n{payload}\n```")),
+        ["not-antigravity"],
+        tmp_path,
+        1,
+        role=AgentRole.REVIEWER,
+    )
+    assert result.status is AgentStatus.INVALID_OUTPUT
+    assert result.data == {}
+
+
 @pytest.fixture
 def agent_request(tmp_path: Path) -> AgentRequest:
     task = tmp_path / "task.txt"
@@ -74,6 +147,23 @@ def agent_request(tmp_path: Path) -> AgentRequest:
         output_schema="result-v1",
         timeout_seconds=10,
     )
+
+
+def test_antigravity_adapter_enables_strict_fenced_json_transport(agent_request: AgentRequest) -> None:
+    handoff = agent_request.workdir / "handoff.json"
+    handoff.write_text("{}", encoding="utf-8")
+    review_request = agent_request.model_copy(update={"role": AgentRole.REVIEWER, "handoff_file": handoff})
+    payload = json.dumps({
+        "status": "passed",
+        "evidence": [],
+        "artifacts": [],
+        "findings": [],
+    })
+    result = AntigravityAdapter(
+        runner=FakeRunner(completed(f"```json\n{payload}\n```")),
+        acl_verifier=lambda directory, file: True,
+    ).run(review_request)
+    assert result.status is AgentStatus.SUCCEEDED
 
 
 def test_codex_capabilities_use_read_only_probes(tmp_path: Path) -> None:
