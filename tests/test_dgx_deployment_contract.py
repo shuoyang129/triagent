@@ -38,3 +38,31 @@ def test_concrete_dgx_profile_uses_verified_paths_and_budgets() -> None:
 def test_concrete_dgx_profile_never_selects_agent_alias() -> None:
     text = PROFILE.read_text(encoding="utf-8")
     assert 'command = ["/home/ys/.local/bin/agent"]' not in text
+
+
+def test_dgx_diagnostic_uses_fixed_vendor_and_conda_paths() -> None:
+    text = BOOTSTRAP.read_text(encoding="utf-8")
+    assert "$HOME/.local/bin/codex" in text
+    assert "$HOME/.local/bin/cursor-agent" in text
+    assert "$HOME/.local/bin/agy" in text
+    assert "$HOME/miniforge3/bin/conda" in text
+    assert "$HOME/.local/bin/agent" not in text
+
+
+def test_dgx_installer_is_explicit_and_avoids_system_installation() -> None:
+    text = INSTALLER.read_text(encoding="utf-8")
+    assert "--apply" in text
+    assert 'env_name="triagent"' in text
+    assert "python=3.12" in text
+    assert "triagent-runs" in text
+    assert "projects" in text
+    assert "sudo" not in text
+    assert "apt-get" not in text
+    assert "conda install" not in text
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is unavailable")
+def test_dgx_scripts_have_valid_bash_syntax() -> None:
+    for script in (BOOTSTRAP, INSTALLER):
+        result = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
