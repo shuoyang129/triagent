@@ -52,4 +52,7 @@ Record each gate independently on the real Windows work host and Ubuntu 24.04 DG
 
 ## Milestone boundary
 
-核心功能在 Windows 本地及模拟 DGX 环境中通过；等待局域网设备上的集成验收。
+Windows local three-agent execution has passed. DGX controller installation,
+CLI capability, NVIDIA, tmux, GUI, Isaac Lab, WebRTC, and ChatGPT App remote
+control must be recorded independently on the real host; none may be inferred
+from simulation or Windows-only tests.
