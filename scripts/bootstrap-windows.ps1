@@ -5,13 +5,24 @@ param(
 $ErrorActionPreference = "Stop"
 
 function Invoke-Probe {
-    param([scriptblock]$Command)
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [string[]]$Arguments = @()
+    )
+    if (-not (Get-Command $Executable -ErrorAction SilentlyContinue)) {
+        return @{ ok = $false; text = "" }
+    }
+    $previousErrorActionPreference = $ErrorActionPreference
     try {
-        $text = (& $Command 2>$null | Out-String).Trim()
+        $ErrorActionPreference = "Continue"
+        $output = & $Executable @Arguments 2>$null
         $code = $LASTEXITCODE
-        return @{ ok = ($null -eq $code -or $code -eq 0); text = $(if ($null -eq $code -or $code -eq 0) { $text } else { "" }) }
+        $text = ($output | Out-String).Trim()
+        return @{ ok = ($code -eq 0); text = $(if ($code -eq 0) { $text } else { "" }) }
     } catch {
         return @{ ok = $false; text = "" }
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
     }
 }
 
@@ -31,17 +42,21 @@ function New-Capability {
 }
 
 $pythonPath = Join-Path $env:LOCALAPPDATA "Programs/Python/Python312/python.exe"
-$python = Invoke-Probe { & $pythonPath --version }
-$git = Invoke-Probe { git --version }
-$codex = Invoke-Probe { codex --version }
-$codexAuth = Invoke-Probe { codex login status }
-$cursor = Invoke-Probe { wsl -d Ubuntu-24.04 -- bash -lc '~/.local/bin/cursor-agent --version' }
-$cursorAuth = Invoke-Probe { wsl -d Ubuntu-24.04 -- bash -lc '~/.local/bin/cursor-agent status' }
+$python = Invoke-Probe -Executable $pythonPath -Arguments @("--version")
+$git = Invoke-Probe -Executable "git" -Arguments @("--version")
+$codexCommand = Get-Command codex.cmd -All -ErrorAction SilentlyContinue |
+    Where-Object { $_.Source -notlike "*WindowsApps*" } |
+    Select-Object -First 1
+$codexExecutable = if ($codexCommand) { $codexCommand.Source } else { "codex" }
+$codex = Invoke-Probe -Executable $codexExecutable -Arguments @("--version")
+$codexAuth = Invoke-Probe -Executable $codexExecutable -Arguments @("login", "status")
+$cursor = Invoke-Probe -Executable "wsl.exe" -Arguments @("-d", "Ubuntu-24.04", "--", "bash", "-lc", "~/.local/bin/cursor-agent --version")
+$cursorAuth = Invoke-Probe -Executable "wsl.exe" -Arguments @("-d", "Ubuntu-24.04", "--", "bash", "-lc", "~/.local/bin/cursor-agent status")
 $agyPath = Join-Path $env:LOCALAPPDATA "agy/bin/agy.exe"
-$antigravity = Invoke-Probe { & $agyPath --version }
+$antigravity = Invoke-Probe -Executable $agyPath -Arguments @("--version")
 $antigravityConfig = Test-Path (Join-Path $env:USERPROFILE ".gemini/antigravity-cli/settings.json")
 $opencodeCommand = Get-Command opencode -ErrorAction SilentlyContinue
-$opencode = if ($opencodeCommand) { Invoke-Probe { opencode --version } } else { @{ ok = $false; text = "" } }
+$opencode = if ($opencodeCommand) { Invoke-Probe -Executable $opencodeCommand.Source -Arguments @("--version") } else { @{ ok = $false; text = "" } }
 
 $payload = [ordered]@{
     generated_at = [DateTimeOffset]::UtcNow.ToString("o")
@@ -56,7 +71,7 @@ $payload = [ordered]@{
     }
 }
 
-$outputPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $Output))
+$outputPath = [System.IO.Path]::GetFullPath($Output)
 $outputDir = Split-Path -Parent $outputPath
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 $json = $payload | ConvertTo-Json -Depth 5

@@ -149,6 +149,7 @@ def _windows_acl(directory:Path,file:Path|None)->bool:
     target=file or directory
     quoted=str(target).replace("'","''")
     is_directory=file is None
+    acl_type="[System.IO.DirectoryInfo]" if is_directory else "[System.IO.FileInfo]"
     grant=f"*{sid}:(OI)(CI)F" if is_directory else f"*{sid}:F"
     system_grant="*S-1-5-18:(OI)(CI)F" if is_directory else "*S-1-5-18:F"
     try:
@@ -159,7 +160,7 @@ def _windows_acl(directory:Path,file:Path|None)->bool:
     except (OSError,subprocess.TimeoutExpired):return False
     if acl_process.returncode!=0:return False
     apply=(
-        f"$a=Get-Acl -LiteralPath '{quoted}' -ErrorAction Stop;"
+        f"$a=({acl_type}::new('{quoted}')).GetAccessControl();"
         "$rules=@($a.Access|ForEach-Object{@{sid=$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value;type=$_.AccessControlType.ToString();rights=$_.FileSystemRights.ToString();inheritance=$_.InheritanceFlags.ToString();propagation=$_.PropagationFlags.ToString()}});"
         "@{owner=$a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;protected=$a.AreAccessRulesProtected;rules=$rules}|ConvertTo-Json -Depth 4 -Compress"
     )

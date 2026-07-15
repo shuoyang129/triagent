@@ -43,3 +43,25 @@ def test_native_probe_contract_checks_nonzero_last_exit_code() -> None:
     command = "$o = (& { cmd /c 'echo plausible-output & exit /b 7' } | Out-String).Trim(); if ($LASTEXITCODE -eq 0) { exit 9 } else { exit 0 }"
     result = subprocess.run(["powershell", "-NoProfile", "-Command", command], check=False)
     assert result.returncode == 0
+
+
+def test_native_probe_accepts_stderr_from_successful_command() -> None:
+    script = Path("scripts/bootstrap-windows.ps1").read_text(encoding="utf-8")
+    start = script.index("function Invoke-Probe")
+    end = script.index("function New-Capability")
+    invoke_probe = script[start:end]
+    command = (
+        '$ErrorActionPreference = "Stop";'
+        f"{invoke_probe};"
+        "$result = Invoke-Probe -Executable 'cmd.exe' "
+        "-Arguments @('/d', '/c', 'echo warning 1>&2 & exit /b 0');"
+        "if (-not $result.ok) { exit 9 }"
+    )
+    result = subprocess.run(["powershell", "-NoProfile", "-Command", command], check=False)
+    assert result.returncode == 0
+
+
+def test_bootstrap_accepts_absolute_output_path() -> None:
+    script = Path("scripts/bootstrap-windows.ps1").read_text(encoding="utf-8")
+    assert "[System.IO.Path]::GetFullPath($Output)" in script
+    assert "Join-Path (Get-Location) $Output" not in script
