@@ -9,7 +9,7 @@ import re
 import pytest
 
 from triagent.adapters.antigravity import AntigravityAdapter
-from triagent.adapters._cli import invoke_json
+from triagent.adapters._cli import invoke_json, probe
 from triagent.adapters.base import AgentRequest, AgentRole, AgentStatus
 from triagent.adapters.codex import CodexAdapter
 from triagent.adapters.cursor import CursorAdapter
@@ -175,6 +175,16 @@ def test_codex_capabilities_use_read_only_probes(tmp_path: Path) -> None:
         ["codex.exe", "--version"],
         ["codex.exe", "login", "status"],
     ]
+
+
+def test_capability_probe_uses_30_second_timeout() -> None:
+    runner = FakeRunner(completed("ready"))
+
+    available, output = probe(runner, ["provider", "status"])
+
+    assert available is True
+    assert output == "ready"
+    assert runner.calls[0][2] == 30
 
 
 def test_missing_binary_is_unavailable(agent_request: AgentRequest) -> None:
@@ -365,8 +375,26 @@ def test_antigravity_print_mode_never_skips_permissions(agent_request: AgentRequ
     result = AntigravityAdapter(runner=runner,acl_verifier=lambda directory,file: True).run(agent_request)
     argv = runner.calls[0][0]
     assert argv[:2] == ["agy.exe", "-p"]
+    assert "--mode" not in argv
     assert "--dangerously-skip-permissions" not in argv
     assert result.status is AgentStatus.SUCCEEDED
+
+
+def test_antigravity_empty_stdout_has_specific_recoverable_diagnostic(
+    agent_request: AgentRequest,
+) -> None:
+    handoff = agent_request.workdir / "handoff.json"
+    handoff.write_text("{}", encoding="utf-8")
+    result = AntigravityAdapter(
+        runner=FakeRunner(completed("")),
+        acl_verifier=lambda directory, file: True,
+    ).run(agent_request.model_copy(update={
+        "role": AgentRole.REVIEWER,
+        "handoff_file": handoff,
+    }))
+
+    assert result.status is AgentStatus.INVALID_OUTPUT
+    assert result.data == {"diagnostic_code": "agy-empty-output"}
 
 
 def test_antigravity_capabilities_use_only_bounded_version_probe_and_auth_is_unknown() -> None:
@@ -375,7 +403,7 @@ def test_antigravity_capabilities_use_only_bounded_version_probe_and_auth_is_unk
     caps = AntigravityAdapter(runner=runner, command=["/opt/agy"]).capabilities()
 
     assert [call[0] for call in runner.calls] == [["/opt/agy", "--version"]]
-    assert runner.calls[0][2] == 10
+    assert runner.calls[0][2] == 30
     assert caps.installed is True
     assert caps.authenticated is None
     assert caps.ready is None

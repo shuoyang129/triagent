@@ -854,6 +854,10 @@ class TaskStore:
                 data=self._git_plumbing(work,["cat-file","blob",oid])
                 path.write_bytes(data)
                 if os.name!="nt":path.chmod(0o755 if mode=="100755" else 0o644)
+            current_head=self._git_plumbing(work,["rev-parse","HEAD"]).decode("ascii").strip()
+            if current_head!=candidate:
+                self._git_plumbing(work,["update-ref","--no-deref","HEAD",candidate,current_head])
+            self._git_plumbing(work,["read-tree",candidate])
         except (OSError,subprocess.CalledProcessError,UnicodeError,ValueError) as error:raise ValueError("candidate restore unavailable") from error
 
     def approval_manifest(self, task_id: str) -> dict[str,str]:

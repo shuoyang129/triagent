@@ -42,9 +42,21 @@ class StageRunner:
     def __init__(self, role: str) -> None:
         self.role = role
         self.inputs: list[str | None] = []
+        self.heads: list[str] = []
+        self.statuses: list[str] = []
+        self.index_trees: list[str] = []
 
     def run(self, argv, cwd, timeout, env_allowlist, stdin=None) -> ProcessResult:
         self.inputs.append(stdin)
+        self.heads.append(subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=cwd, check=True, capture_output=True, text=True
+        ).stdout.strip())
+        self.statuses.append(subprocess.run(
+            ["git", "status", "--porcelain"], cwd=cwd, check=True, capture_output=True, text=True
+        ).stdout)
+        self.index_trees.append(subprocess.run(
+            ["git", "write-tree"], cwd=cwd, check=True, capture_output=True, text=True
+        ).stdout.strip())
         payload = {"status": "passed", "evidence": ["tests pass"], "artifacts": []}
         if self.role == "review":
             payload["findings"] = []
@@ -132,6 +144,16 @@ def test_cursor_free_text_advances_on_git_derived_change(tmp_path: Path) -> None
     assert VENDOR_MARKER not in persisted_text
     assert len(verifier.inputs) == 1
     assert len(reviewer.inputs) == 1
+    assert verifier.heads == [meta["reviewed_commit"]]
+    reviewed_tree = subprocess.run(
+        ["git", "rev-parse", f"{meta['reviewed_commit']}^{{tree}}"],
+        cwd=work,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert verifier.index_trees == [reviewed_tree]
+    assert verifier.statuses == [""]
 
 
 def test_cursor_no_change_stops_before_verification(tmp_path: Path) -> None:

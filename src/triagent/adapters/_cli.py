@@ -301,6 +301,7 @@ def invoke_json(
     env: Mapping[str, str] | None = None,
     secret_values: Sequence[str] = (), role: AgentRole = AgentRole.IMPLEMENTER, stdin: str | None = None, cursor_envelope: bool = False,
     allow_fenced_json: bool = False,
+    empty_output_diagnostic: str | None = None,
 ) -> AgentResult:
     try:
         process = runner.run(argv, cwd, timeout, env or {}, stdin=stdin)
@@ -314,6 +315,12 @@ def invoke_json(
         if auth_code or any(marker in diagnostic for marker in _AUTH_FAILURES):
             return AgentResult(status=AgentStatus.UNAVAILABLE, summary="CLI authentication or configuration is unavailable")
         return AgentResult(status=AgentStatus.FAILED, summary="CLI execution failed")
+    if empty_output_diagnostic is not None and not process.stdout.strip():
+        return AgentResult(
+            status=AgentStatus.INVALID_OUTPUT,
+            summary="CLI returned empty structured output",
+            data={"diagnostic_code": empty_output_diagnostic},
+        )
     if allow_fenced_json:
         payload, diagnostic = _decode_json_object(process.stdout)
         if diagnostic is not None:
@@ -363,9 +370,17 @@ def invoke_json(
     )
 
 
+CAPABILITY_PROBE_TIMEOUT_SECONDS = 30
+
+
 def probe(runner: ProcessRunner, argv: Sequence[str], env: Mapping[str, str] | None = None) -> tuple[bool, str]:
     try:
-        result = runner.run(argv, Path.cwd(), 10, env or {})
+        result = runner.run(
+            argv,
+            Path.cwd(),
+            CAPABILITY_PROBE_TIMEOUT_SECONDS,
+            env or {},
+        )
     except (FileNotFoundError, OSError):
         return False, ""
     return (not result.timed_out and result.returncode == 0), result.stdout.strip()

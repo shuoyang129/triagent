@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import uuid
 import json
@@ -16,6 +17,7 @@ from triagent.adapters.fake import FakeAgent
 
 _TRUSTED={CursorAdapter:("cursor",frozenset({AgentRole.IMPLEMENTER})),CodexAdapter:("codex",frozenset({AgentRole.VERIFIER})),AntigravityAdapter:("antigravity",frozenset({AgentRole.REVIEWER})),DeepSeekAdapter:("deepseek",frozenset({AgentRole.IMPLEMENTER}))}
 _SAFE_DIAGNOSTICS=frozenset({
+    "agy-empty-output",
     "canonical-output-invalid",
     "cursor-envelope-invalid",
     "cursor-result-non-json",
@@ -40,6 +42,9 @@ BLOCKED_STATES = {
     TaskState.FAILED_RECOVERABLE,
     TaskState.FAILED_FINAL,
 }
+
+_BASE_LEASE_SECONDS = 600
+_AGENT_LEASE_SAFETY_SECONDS = 60
 
 
 class Orchestrator:
@@ -106,6 +111,13 @@ class Orchestrator:
 
     def _request(self, task_id: str, role: AgentRole, schema: str, adapter: AgentAdapter) -> AgentRequest:
         run_dir = self.store.runs_root / task_id
+        raw_timeout = os.environ.get("TRIAGENT_AGENT_TIMEOUT_SECONDS", "900")
+        try:
+            timeout_seconds = int(raw_timeout)
+        except ValueError as exc:
+            raise ValueError("TRIAGENT_AGENT_TIMEOUT_SECONDS must be an integer") from exc
+        if not 60 <= timeout_seconds <= 3600:
+            raise ValueError("TRIAGENT_AGENT_TIMEOUT_SECONDS must be between 60 and 3600")
         return AgentRequest(
             role=role,
             agent_identity=_contract(adapter)[0],
@@ -113,7 +125,7 @@ class Orchestrator:
             handoff_file=(run_dir / "handoff.json") if role in {AgentRole.VERIFIER, AgentRole.REVIEWER} else None,
             workdir=run_dir / "worktree",
             output_schema=schema,
-            timeout_seconds=300,
+            timeout_seconds=timeout_seconds,
         )
 
     def _call(self, task_id: str, state: TaskState, adapter: AgentAdapter, request: AgentRequest):
@@ -121,7 +133,12 @@ class Orchestrator:
         identity,roles=_contract(adapter)
         if request.role not in roles or request.agent_identity != identity:
             raise ValueError("adapter identity/role mismatch")
-        if self._lease_owner: self.store.renew_lease(task_id, self._lease_owner, 600)
+        lease_seconds = max(
+            _BASE_LEASE_SECONDS,
+            request.timeout_seconds + _AGENT_LEASE_SAFETY_SECONDS,
+        )
+        if self._lease_owner:
+            self.store.renew_lease(task_id, self._lease_owner, lease_seconds)
         estimate=adapter.estimate_cost(request)
         if estimate.estimated_usd == 0 and not estimate.zero_cost_enforced:
             raise BudgetExceeded("zero estimate is not enforced")
@@ -139,7 +156,8 @@ class Orchestrator:
                 task_id, state, self._failed_stage(request.role), diagnostic
             )
             return None
-        if self._lease_owner: self.store.renew_lease(task_id, self._lease_owner, 600)
+        if self._lease_owner:
+            self.store.renew_lease(task_id, self._lease_owner, lease_seconds)
         actual = 0.0 if estimate.zero_cost_enforced else result.actual_usd
         raw_diagnostic=result.data.get("diagnostic_code")
         diagnostic=raw_diagnostic if isinstance(raw_diagnostic,str) and raw_diagnostic in _SAFE_DIAGNOSTICS else (result.status.value if result.status is not AgentStatus.SUCCEEDED else "")
@@ -215,6 +233,8 @@ class Orchestrator:
                     None if cursor_implementation else result.data.get("changed_paths"),
                     require_changes=cursor_implementation,
                 )
+                if self.store.workspace(task_id) is not None:
+                    self.store.restore_candidate_worktree(task_id)
             except ValueError as error:
                 if cursor_implementation and str(error) == "candidate manifest rejected: no changes":
                     diagnostic = "cursor-no-worktree-change"
@@ -268,7 +288,7 @@ class Orchestrator:
             if severities & {ReviewSeverity.BLOCKER, ReviewSeverity.MAJOR}:
                 self.store.record_outcome(task_id, self._outcome("review", result, status="failed"))
                 runtime = self.store.runtime(task_id)
-                repair_limit = 3 if task.spec.risk in {RiskLevel.HIGH, RiskLevel.ROBOT_SAFETY} else 2
+                repair_limit = self._repair_limit(task.spec.risk)
                 if runtime.repair_attempts >= repair_limit:
                     return self.store.transition(task_id, state, TaskState.FAILED_FINAL, "repair-limit-reached").state
                 self.store.increment_repair_attempts(task_id)
@@ -316,10 +336,19 @@ class Orchestrator:
 
     @staticmethod
     def _repair_limit(risk: RiskLevel) -> int:
-        return 3 if risk in {RiskLevel.HIGH, RiskLevel.ROBOT_SAFETY} else 2
+        default = 3 if risk in {RiskLevel.HIGH, RiskLevel.ROBOT_SAFETY} else 2
+        raw = os.environ.get("TRIAGENT_REPAIR_ATTEMPT_LIMIT")
+        if raw is None:
+            return default
+        try:
+            value = int(raw)
+        except ValueError:
+            return default
+        return value if default <= value <= 20 else default
 
     def resume_until_blocked(self, task_id: str) -> TaskState:
         owner = str(uuid.uuid4())
+        recovery_accepted = False
         self.store.acquire_lease(task_id, owner, 600)
         self._lease_owner = owner
         try:
@@ -392,14 +421,18 @@ class Orchestrator:
                 target=target,
                 lease_owner=owner,
             )
+            recovery_accepted = True
             for _ in range(100):
                 state = self.advance(task_id)
                 if state in BLOCKED_STATES:
                     return state
             raise RuntimeError("workflow did not reach a blocked state within 100 transitions")
-        except (ValueError, BudgetExceeded, LeaseConflict):
-            raise
         except Exception as error:
+            if (
+                isinstance(error, (ValueError, BudgetExceeded, LeaseConflict))
+                and not recovery_accepted
+            ):
+                raise
             current = self.store.load(task_id)
             if current.state not in BLOCKED_STATES:
                 self.store.record_outcome(
