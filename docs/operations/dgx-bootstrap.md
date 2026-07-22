@@ -19,6 +19,9 @@ cd /home/ys/works/robots/triagent
 bash scripts/bootstrap-dgx.sh
 bash scripts/install-triagent-dgx.sh --check
 bash scripts/install-triagent-dgx.sh --apply
+bash scripts/install-cursor-sandbox-apparmor.sh --check
+sudo -v
+bash scripts/install-cursor-sandbox-apparmor.sh --apply
 ```
 
 The installer creates only the `triagent` Python 3.12 environment and the
@@ -27,6 +30,12 @@ The installer creates only the `triagent` Python 3.12 environment and the
 If the environment has no `node` executable, the installer links an existing
 NVM or `~/.local/opt` Node runtime into `triagent/bin` so the Codex CLI can
 start; it does not download Node or activate NVM globally.
+
+The separate AppArmor installer grants `userns` only to
+`~/.local/share/cursor-agent/versions/*/cursorsandbox`. It does not disable
+`kernel.apparmor_restrict_unprivileged_userns`. Configure the current Cursor
+account with `approvalMode=auto-review` and `sandbox.mode=enabled`; the normal
+DGX profile also passes `--auto-review --sandbox enabled` explicitly.
 
 ## Controller
 
@@ -39,9 +48,17 @@ $CONDA run -n triagent triagent status TASK_ID --data-root "$DATA_ROOT"
 $CONDA run -n triagent triagent report TASK_ID --data-root "$DATA_ROOT"
 ```
 
-Use only a task ID printed by TriAgent. The profile selects
-`/home/ys/.local/bin/cursor-agent`; do not substitute `agent`.
+Use only a task ID printed by TriAgent. The profile selects the repository-owned
+Cursor and Antigravity adapters, which delegate to the fixed vendor binaries;
+do not substitute `agent`.
 DeepSeek/OpenCode remains disabled.
+
+`profiles/dgx.spark.synthetic-force.toml` is an explicit exception for
+strictly isolated synthetic repositories. It passes `--force`, which overrides
+Cursor repository safety policy, and its adapter refuses execution unless the
+worktree is below `/home/ys/works/robots/triagent-synthetic-runs/runs` and every
+task scope path resolves below `/home/ys/works/robots/synthetic-projects`.
+Never make this profile the default and never use it for a robot repository.
 
 Isaac GUI, WebRTC, systemd persistence, ChatGPT App remote control, and robot
 hardware remain separate onsite gates.

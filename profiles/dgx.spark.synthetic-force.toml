@@ -1,19 +1,19 @@
 [host]
-name = "spark-5643"
+name = "spark-5643-synthetic-force"
 platform = "ubuntu-24.04"
 hardware = "nvidia-dgx-spark"
 address = "spark"
 
 [paths]
-runs = "/home/ys/works/robots/triagent-runs"
-workspace = "/home/ys/works/robots/projects"
+runs = "/home/ys/works/robots/triagent-synthetic-runs"
+workspace = "/home/ys/works/robots/synthetic-projects"
 python = "/home/ys/miniforge3/envs/triagent/bin/python"
 
 [capabilities]
 nvidia_gpu = true
 container_runtime = "nvidia-container-toolkit"
-robot_simulation = "isaac-lab"
-visualization = ["local-display", "webrtc"]
+robot_simulation = "none"
+visualization = []
 background_execution = ["systemd-user", "tmux"]
 
 [agents.codex]
@@ -21,7 +21,7 @@ command = ["/home/ys/.local/bin/codex"]
 estimated_usd = 1.0
 
 [agents.cursor]
-command = ["/home/ys/works/robots/triagent/scripts/cursor-agent-adapter.zsh", "--auto-review", "--sandbox", "enabled", "--model", "composer-2.5-fast"]
+command = ["/home/ys/works/robots/triagent/scripts/cursor-synthetic-force-adapter.zsh", "--force", "--sandbox", "enabled", "--model", "composer-2.5-fast"]
 estimated_usd = 1.0
 
 [agents.antigravity]

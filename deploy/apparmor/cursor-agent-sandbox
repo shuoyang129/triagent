@@ -1,0 +1,8 @@
+# Narrow Ubuntu AppArmor userns grant for Cursor's sandbox helper.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile cursor-agent-sandbox /home/ys/.local/share/cursor-agent/versions/*/cursorsandbox flags=(unconfined) {
+  userns,
+  include if exists <local/cursor-agent-sandbox>
+}
