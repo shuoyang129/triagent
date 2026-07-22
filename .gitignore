@@ -5,6 +5,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+uv.lock
 work/
 runs/
 *.db

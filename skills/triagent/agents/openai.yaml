@@ -1,4 +1,4 @@
 interface:
   display_name: "TriAgent Operator"
   short_description: "Operate approval-gated TriAgent tasks safely"
-  default_prompt: "Use triagent to diagnose, run, inspect, approve, and report this task."
+  default_prompt: "Use $triagent to diagnose, run, inspect, approve, and report this task."
