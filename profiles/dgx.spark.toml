@@ -17,7 +17,7 @@ visualization = ["local-display", "webrtc"]
 background_execution = ["systemd-user", "tmux"]
 
 [agents.codex]
-command = ["/home/ys/.local/bin/codex"]
+command = ["/home/ys/works/robots/triagent/scripts/codex-verify-adapter.zsh"]
 estimated_usd = 1.0
 
 [agents.cursor]

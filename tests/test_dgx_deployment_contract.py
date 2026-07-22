@@ -14,6 +14,7 @@ SYNTHETIC_PROFILE = ROOT / "profiles" / "dgx.spark.synthetic-force.toml"
 BOOTSTRAP = ROOT / "scripts" / "bootstrap-dgx.sh"
 INSTALLER = ROOT / "scripts" / "install-triagent-dgx.sh"
 APPARMOR_INSTALLER = ROOT / "scripts" / "install-cursor-sandbox-apparmor.sh"
+CODEX_ADAPTER = ROOT / "scripts" / "codex-verify-adapter.zsh"
 CURSOR_ADAPTER = ROOT / "scripts" / "cursor-agent-adapter.zsh"
 FORCE_ADAPTER = ROOT / "scripts" / "cursor-synthetic-force-adapter.zsh"
 AGY_ADAPTER = ROOT / "scripts" / "agy-review-adapter.zsh"
@@ -31,7 +32,9 @@ def test_concrete_dgx_profile_uses_verified_paths_and_budgets() -> None:
     assert config["paths"]["runs"] == "/home/ys/works/robots/triagent-runs"
     assert config["paths"]["workspace"] == "/home/ys/works/robots/projects"
     assert config["paths"]["python"] == "/home/ys/miniforge3/envs/triagent/bin/python"
-    assert config["agents"]["codex"]["command"] == ["/home/ys/.local/bin/codex"]
+    assert config["agents"]["codex"]["command"] == [
+        "/home/ys/works/robots/triagent/scripts/codex-verify-adapter.zsh"
+    ]
     assert config["agents"]["cursor"]["command"] == [
         "/home/ys/works/robots/triagent/scripts/cursor-agent-adapter.zsh",
         "--auto-review",
@@ -125,6 +128,6 @@ def test_dgx_scripts_have_valid_bash_syntax() -> None:
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is unavailable")
 def test_dgx_adapter_scripts_have_valid_zsh_syntax() -> None:
-    for script in (CURSOR_ADAPTER, FORCE_ADAPTER, AGY_ADAPTER):
+    for script in (CODEX_ADAPTER, CURSOR_ADAPTER, FORCE_ADAPTER, AGY_ADAPTER):
         result = subprocess.run(["zsh", "-n", str(script)], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr

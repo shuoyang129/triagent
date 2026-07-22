@@ -2,6 +2,7 @@
 set -euo pipefail
 
 export PYTEST_ADDOPTS="-p no:cacheprovider"
+export PYTHONDONTWRITEBYTECODE=1
 
 cursor_agent_bin="${CURSOR_AGENT_BIN:-/home/ys/.local/bin/cursor-agent}"
 args=("$@")

@@ -7,6 +7,8 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
+AGY_ADAPTER = ROOT / "scripts" / "agy-review-adapter.zsh"
+CODEX_ADAPTER = ROOT / "scripts" / "codex-verify-adapter.zsh"
 CURSOR_ADAPTER = ROOT / "scripts" / "cursor-agent-adapter.zsh"
 FORCE_ADAPTER = ROOT / "scripts" / "cursor-synthetic-force-adapter.zsh"
 
@@ -75,3 +77,90 @@ def test_synthetic_force_adapter_rejects_normal_repository() -> None:
 
     assert result.returncode == 64
     assert "refusing non-synthetic worktree" in result.stderr
+
+
+def test_codex_adapter_embeds_controller_verification_evidence(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    (repo / "health.py").write_bytes(b'def health_status():\r\n    return "ok"\r\n')
+    tests = repo / "tests"
+    tests.mkdir()
+    (tests / "test_health.py").write_bytes(
+        b"import unittest\r\nfrom health import health_status\r\n"
+        b"class TestHealth(unittest.TestCase):\r\n"
+        b"    def test_ok(self): self.assertEqual(health_status(), 'ok')\r\n"
+    )
+    subprocess.run(["git", "add", "health.py", "tests/test_health.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "candidate"], cwd=repo, check=True)
+
+    fake_codex = tmp_path / "fake-codex"
+    prompt_log = tmp_path / "prompt.txt"
+    fake_codex.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+prompt = sys.stdin.read()
+open(os.environ["FAKE_CODEX_PROMPT_LOG"], "w", encoding="utf-8").write(prompt)
+payload = {"status":"passed","evidence":["embedded"],"artifacts":[]}
+print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":json.dumps(payload)}}))
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    result = subprocess.run(
+        [str(CODEX_ADAPTER), "exec", "--json", "-"],
+        cwd=repo,
+        input="TRIAGENT_CONTROLLER_PROMPT_V2\n",
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "CODEX_BIN": str(fake_codex),
+            "FAKE_CODEX_PROMPT_LOG": str(prompt_log),
+        },
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    prompt = prompt_log.read_text(encoding="utf-8")
+    assert "UNITTEST_EXIT_STATUS=0" in prompt
+    assert "GIT_DIFF_CHECK_EXIT_STATUS=0" in prompt
+    assert "CANDIDATE_COMMIT_NONEMPTY=true" in prompt
+    event = json.loads(result.stdout)
+    assert json.loads(event["item"]["text"])["status"] == "passed"
+
+
+def test_agy_adapter_propagates_safe_auth_marker(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    source = tmp_path / "input.txt"
+    source.write_text("TRIAGENT_CONTROLLER_PROMPT_V2\n", encoding="utf-8")
+    fake_agy = tmp_path / "fake-agy"
+    fake_agy.write_text(
+        "#!/bin/sh\nprintf 'Authentication required. Please log in.\\n' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
+    fake_agy.chmod(0o755)
+
+    result = subprocess.run(
+        [str(AGY_ADAPTER), "-p", f"Read and follow the complete instructions in this local file: {source}"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env={**os.environ, "AGY_BIN": str(fake_agy)},
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Authentication required" in result.stderr
+    marker = "TriAgent AGY diagnostic saved for local diagnosis: "
+    diagnostic = Path(result.stderr.split(marker, 1)[1].splitlines()[0])
+    diagnostic.unlink()

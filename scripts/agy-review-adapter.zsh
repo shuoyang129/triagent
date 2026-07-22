@@ -85,6 +85,9 @@ set -e
 
 if (( agy_exit_code != 0 )); then
   save_diagnostic "${agy_exit_code}"
+  if /usr/bin/grep -Eiq 'authentication required|authentication failed|login required|not logged in' "${stderr_file}"; then
+    print -u2 -- "Authentication required"
+  fi
   exit "${agy_exit_code}"
 fi
 
