@@ -34,6 +34,24 @@ _MAX_TOTAL_CHANGE_BYTES = 4 * 1024 * 1024
 _ALLOWED_MODELS = frozenset({
     "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner",
 })
+DeepSeekDiagnostic = Literal[
+    "deepseek-disabled",
+    "deepseek-billing-not-confirmed",
+    "deepseek-live-not-confirmed",
+    "deepseek-key-missing",
+    "deepseek-sdk-missing",
+    "deepseek-authentication-failed",
+    "deepseek-insufficient-balance",
+    "deepseek-permission-denied",
+    "deepseek-rate-limited",
+    "deepseek-timeout",
+    "deepseek-connection-failed",
+    "deepseek-service-unavailable",
+    "deepseek-request-invalid",
+    "deepseek-model-not-listed",
+    "deepseek-smoke-invalid",
+    "deepseek-api-failed",
+]
 
 
 class DeepSeekCapabilities(AgentCapabilities):
@@ -43,6 +61,7 @@ class DeepSeekCapabilities(AgentCapabilities):
     model_listed: bool = False
     agent_tool_smoke_test: bool = False
     billing_confirmed: bool = False
+    diagnostic_code: DeepSeekDiagnostic | None = None
 
 
 class FileChange(BaseModel):
@@ -105,6 +124,43 @@ def _model_ids(response: Any) -> set[str]:
     if not isinstance(data, list):
         return set()
     return {item.id for item in data if isinstance(getattr(item, "id", None), str)}
+
+
+def _api_error_diagnostic(error: Exception) -> DeepSeekDiagnostic:
+    status = getattr(error, "status_code", None)
+    markers: list[str] = []
+    for value in (getattr(error, "code", None), getattr(error, "type", None)):
+        if isinstance(value, str):
+            markers.append(value.lower())
+    body = getattr(error, "body", None)
+    if isinstance(body, dict):
+        payload = body.get("error", body)
+        if isinstance(payload, dict):
+            for key in ("code", "type"):
+                value = payload.get(key)
+                if isinstance(value, str):
+                    markers.append(value.lower())
+    marker = " ".join(markers)
+    class_name = type(error).__name__.lower()
+    if status == 401 or "authentication" in class_name or "invalid_api_key" in marker:
+        return "deepseek-authentication-failed"
+    if status == 402 or "insufficient_balance" in marker or "insufficient_quota" in marker:
+        return "deepseek-insufficient-balance"
+    if status == 403 or "permission" in class_name:
+        return "deepseek-permission-denied"
+    if status == 429 or "ratelimit" in class_name or "rate_limit" in marker:
+        return "deepseek-rate-limited"
+    if isinstance(error, TimeoutError) or "timeout" in class_name:
+        return "deepseek-timeout"
+    if "connection" in class_name:
+        return "deepseek-connection-failed"
+    if isinstance(status, int) and status >= 500:
+        return "deepseek-service-unavailable"
+    if status in {400, 404, 409, 422} or any(
+        token in class_name for token in ("badrequest", "notfound", "unprocessable")
+    ):
+        return "deepseek-request-invalid"
+    return "deepseek-api-failed"
 
 
 def _relative_path(raw: str) -> PurePosixPath:
@@ -272,33 +328,58 @@ class DeepSeekAdapter(AgentAdapter):
         installed = importlib.util.find_spec("openai") is not None or self._client_factory is not _default_client_factory
         base = dict(enabled=self._enabled, billing_confirmed=self._billing)
         if not self._enabled:
-            return DeepSeekCapabilities(available=False, installed=installed, authenticated=None, ready=False, **base)
-        if not self._billing or not self._live_confirmed or not self._api_key or not installed:
-            return DeepSeekCapabilities(available=False, installed=installed, authenticated=None, ready=False, **base)
+            return DeepSeekCapabilities(available=False, installed=installed, authenticated=None, ready=False, diagnostic_code="deepseek-disabled", **base)
+        if not self._billing:
+            return DeepSeekCapabilities(available=False, installed=installed, authenticated=None, ready=False, diagnostic_code="deepseek-billing-not-confirmed", **base)
+        if not self._live_confirmed:
+            return DeepSeekCapabilities(available=False, installed=installed, authenticated=None, ready=False, diagnostic_code="deepseek-live-not-confirmed", **base)
+        if not self._api_key:
+            return DeepSeekCapabilities(available=False, installed=installed, authenticated=False, ready=False, diagnostic_code="deepseek-key-missing", **base)
+        if not installed:
+            return DeepSeekCapabilities(available=False, installed=False, authenticated=None, ready=False, diagnostic_code="deepseek-sdk-missing", **base)
         try:
             client = self._new_client()
             listed = self._model in _model_ids(client.models.list())
-            smoke = False
-            if listed:
-                response = client.chat.completions.create(
-                    model=self._model,
-                    messages=[{"role": "user", "content": 'Return only {"status":"ok"}.'}],
-                    response_format={"type": "json_object"},
-                    temperature=0,
-                    max_tokens=32,
-                )
-                payload, error = _decode_json_object(_message_content(response))
-                smoke = error is None and payload == {"status": "ok"}
-        except Exception:
-            return DeepSeekCapabilities(available=False, installed=installed, authenticated=False, ready=False, **base)
-        available = listed and smoke
-        if available:
-            self._client = client
-            self._ready_until = time.monotonic() + 60
+        except Exception as error:
+            diagnostic = _api_error_diagnostic(error)
+            authenticated = False if diagnostic == "deepseek-authentication-failed" else None
+            return DeepSeekCapabilities(available=False, installed=installed, authenticated=authenticated, ready=False, diagnostic_code=diagnostic, **base)
+        if not listed:
+            return DeepSeekCapabilities(
+                available=False, installed=installed, authenticated=True, headless=True,
+                ready=False, api_configured_reachable=True, model_listed=False,
+                diagnostic_code="deepseek-model-not-listed", **base,
+            )
+        try:
+            response = client.chat.completions.create(
+                model=self._model,
+                messages=[{"role": "user", "content": 'Return only this JSON object: {"status":"ok"}.'}],
+                response_format={"type": "json_object"},
+                temperature=0,
+                max_tokens=32,
+            )
+            payload, error = _decode_json_object(_message_content(response))
+        except Exception as error:
+            diagnostic = _api_error_diagnostic(error)
+            return DeepSeekCapabilities(
+                available=False, installed=installed,
+                authenticated=False if diagnostic == "deepseek-authentication-failed" else True,
+                headless=True, ready=False, api_configured_reachable=True,
+                model_listed=True, diagnostic_code=diagnostic, **base,
+            )
+        if error is not None or payload != {"status": "ok"}:
+            return DeepSeekCapabilities(
+                available=False, installed=installed, authenticated=True, headless=True,
+                ready=False, api_configured_reachable=True, model_listed=True,
+                agent_tool_smoke_test=False, diagnostic_code="deepseek-smoke-invalid",
+                **base,
+            )
+        self._client = client
+        self._ready_until = time.monotonic() + 60
         return DeepSeekCapabilities(
-            available=available, installed=installed, authenticated=True, headless=True,
-            ready=available, api_configured_reachable=True, model_listed=listed,
-            agent_tool_smoke_test=smoke, **base,
+            available=True, installed=installed, authenticated=True, headless=True,
+            ready=True, api_configured_reachable=True, model_listed=True,
+            agent_tool_smoke_test=True, **base,
         )
 
     def run(self, request: AgentRequest) -> AgentResult:

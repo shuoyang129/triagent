@@ -416,6 +416,16 @@ class Orchestrator:
                     lease_owner=owner,
                 )
                 if not capability.available or capability.ready is not True:
+                    diagnostic = getattr(capability, "diagnostic_code", None) or "deepseek-api-failed"
+                    self.store.record_outcome(
+                        task_id,
+                        StageOutcome(
+                            stage="implement",
+                            status="failed",
+                            summary="requires-repair",
+                            diagnostic=diagnostic,
+                        ),
+                    )
                     raise ValueError("persisted DeepSeek implementer is not ready")
             self.store.accept_recovery(
                 task_id,

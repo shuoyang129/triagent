@@ -497,7 +497,7 @@ estimated_usd = 1.0
 probe_estimated_usd = 0.25
 ```
 
-启用前必须由操作者在进程环境中设置 `DEEPSEEK_API_KEY`，并将 `enabled` 改为 `true`。密钥不能写入 TOML、任务提示或日志。真实 `run`/`resume` 仍必须显式传入 `--live-confirmed --billing-confirmed`；readiness probe 和实现调用都会先占用控制器预算。
+启用前必须由操作者在进程环境中设置 `DEEPSEEK_API_KEY`，并将 `enabled` 改为 `true`。密钥不能写入 TOML、任务提示或日志。真实 `run`/`resume` 仍必须显式传入 `--live-confirmed --billing-confirmed`；readiness probe 和实现调用都会先占用控制器预算。如果密钥保存在 `~/.env`，必须先将其导出到 TriAgent 进程环境，不能只做未导出的 shell 赋值。readiness 失败只持久化认证、余额、模型列表、限流、超时、连接、请求、服务或 smoke-invalid 等白名单诊断码，不保存供应商响应正文。
 
 原生 adapter 不给模型 shell 或任意工具权限。它只提供大小受限的 Git 跟踪 UTF-8 文本快照，并只接受结构化相对路径 `write`/`delete` 操作；本地控制器会拒绝绝对路径、`..`、`.git`、符号链接、重复路径、超量或超大变更，再原子写入。最终候选仍经过 scope/forbidden、Codex 验证和 Antigravity 审查。
 

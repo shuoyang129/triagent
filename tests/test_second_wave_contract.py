@@ -150,6 +150,51 @@ max_usd=5
     assert order[:2] == ["cursor","deepseek"]
 
 
+def test_failed_deepseek_readiness_is_persisted_as_safe_setup_diagnostic(
+    tmp_path, monkeypatch
+):
+    repo=tmp_path/"repo"; repo.mkdir(); subprocess.run(["git","init","-q"],cwd=repo,check=True)
+    subprocess.run(["git","config","user.email","x"],cwd=repo,check=True); subprocess.run(["git","config","user.name","x"],cwd=repo,check=True)
+    (repo/"a").write_text("a",encoding="utf-8"); subprocess.run(["git","add","a"],cwd=repo,check=True); subprocess.run(["git","commit","-qm","a"],cwd=repo,check=True)
+    profile=tmp_path/"p.toml"; profile.write_text('''
+[agents.cursor]
+command=["cursor"]
+estimated_usd=0.5
+[agents.codex]
+command=["codex"]
+estimated_usd=0.5
+[agents.antigravity]
+command=["agy"]
+estimated_usd=0.5
+[agents.deepseek]
+enabled=true
+model="deepseek-v4-flash"
+base_url="https://api.deepseek.com"
+estimated_usd=0.5
+probe_estimated_usd=0.25
+[budget]
+max_agent_calls=10
+max_minutes=60
+max_usd=5
+''',encoding="utf-8")
+    class CursorStub:
+        def __init__(self,*args,**kwargs): pass
+        def capabilities(self): return type("C",(),{"available":False})()
+    class DeepSeekStub:
+        def __init__(self,*args,**kwargs): pass
+        def capabilities(self):
+            return type("C",(),{
+                "available":False, "diagnostic_code":"deepseek-insufficient-balance",
+            })()
+    monkeypatch.setattr(cli_module,"CursorAdapter",CursorStub)
+    monkeypatch.setattr(cli_module,"DeepSeekAdapter",DeepSeekStub)
+    data=tmp_path/"data"
+    result=CliRunner().invoke(cli_module.app,["run","--risk","low","--acceptance","tests pass","--visual-check","none","--profile",str(profile),"--live-confirmed","--billing-confirmed","--data-root",str(data),str(repo),"x"])
+    assert result.exit_code != 0
+    task_id=next((data/"runs").iterdir()).name
+    assert TaskStore(data).outcomes(task_id)["setup"].diagnostic == "deepseek-insufficient-balance"
+
+
 def test_pruning_uses_durable_task_approval(tmp_path):
     repo=tmp_path/"repo"; repo.mkdir(); subprocess.run(["git","init","-q"],cwd=repo,check=True)
     subprocess.run(["git","config","user.email","x@y"],cwd=repo,check=True); subprocess.run(["git","config","user.name","x"],cwd=repo,check=True)

@@ -150,6 +150,7 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
     if profile != "fake" and not (live_confirmed and billing_confirmed):
         raise typer.BadParameter("real profiles require --live-confirmed and --billing-confirmed")
     config=None; budget=Budget(); fallback_name="deepseek"; fallback_enabled=False; fallback_estimate=None; probe_cost=None
+    setup_diagnostic: str | None = None
     try:
         if profile != "fake":
             config=tomllib.loads(Path(profile).read_text(encoding="utf-8"))
@@ -190,6 +191,8 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
                 deepseek=DeepSeekAdapter(enabled=True,billing_confirmed=billing_confirmed,live_confirmed=live_confirmed,estimated_usd=fallback_estimate,**_deepseek_options(config))
                 deepseek_caps=store.execute_paid_operation(task.id,probe_cost,deepseek.capabilities)
                 capabilities["deepseek"]=deepseek_caps
+                if not deepseek_caps.available:
+                    setup_diagnostic = deepseek_caps.diagnostic_code or "deepseek-api-failed"
             choice = ImplementationRouter().choose(cursor_usage=0.0, capabilities=capabilities)
             orchestrator = Orchestrator(
                 store, cursor if choice.name == "cursor" else deepseek, codex, antigravity,
@@ -200,7 +203,8 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
         preserved=[]
         if run_worktree.exists(): preserved.append(f"preserved worktree: {run_worktree}")
         preserved.append(f"preservation branch may exist: triagent/{task.id}")
-        if store.load(task.id).state is TaskState.SPEC: store.fail_setup(task.id, f"Setup failed: {type(error).__name__}", preserved)
+        if store.load(task.id).state is TaskState.SPEC:
+            store.fail_setup(task.id, setup_diagnostic or f"Setup failed: {type(error).__name__}", preserved)
         raise typer.BadParameter("task setup failed; inspect persisted task status") from error
     (store.runs_root / task.id / "final-report.md").write_text(render_persisted_report(store, task.id), encoding="utf-8")
     typer.echo(f"Task: {task.id}\nState: {state.value}\nReport: {store.runs_root / task.id / 'final-report.md'}")
@@ -346,10 +350,12 @@ def doctor(profile: Annotated[str, typer.Option()] = "fake") -> None:
     typer.echo(f"Profile: {profile_path}")
     for name, adapter in probes:
         capability = adapter.capabilities()
+        diagnostic = getattr(capability, "diagnostic_code", None)
         typer.echo(
             f"{name}: installed={_status(capability.installed)} "
             f"authenticated={_status(capability.authenticated)} "
             f"ready={_status(capability.ready)}"
+            + (f" diagnostic={diagnostic}" if diagnostic else "")
         )
 
 

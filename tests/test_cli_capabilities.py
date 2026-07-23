@@ -436,6 +436,67 @@ def test_deepseek_invalid_smoke_response_fails_closed() -> None:
     caps = DeepSeekAdapter(enabled=True, billing_confirmed=True, live_confirmed=True, api_key="secret", client_factory=native_client_factory(client)).capabilities()
     assert caps.agent_tool_smoke_test is False
     assert caps.available is False
+    assert caps.diagnostic_code == "deepseek-smoke-invalid"
+
+
+def test_deepseek_readiness_prompt_explicitly_requests_json() -> None:
+    calls = []
+    client = NativeDeepSeekClient()
+    original = client.chat.completions.create
+    client.chat.completions.create = lambda **kwargs: (
+        calls.append(kwargs) or original(**kwargs)
+    )
+
+    caps = DeepSeekAdapter(
+        enabled=True, billing_confirmed=True, live_confirmed=True,
+        api_key="secret", client_factory=native_client_factory(client),
+    ).capabilities()
+
+    assert caps.available is True
+    assert "JSON" in calls[0]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize(
+    ("status_code", "body", "expected"),
+    [
+        (401, None, "deepseek-authentication-failed"),
+        (402, None, "deepseek-insufficient-balance"),
+        (403, None, "deepseek-permission-denied"),
+        (429, None, "deepseek-rate-limited"),
+        (400, None, "deepseek-request-invalid"),
+        (503, None, "deepseek-service-unavailable"),
+        (None, {"error": {"code": "insufficient_balance"}}, "deepseek-insufficient-balance"),
+    ],
+)
+def test_deepseek_readiness_maps_api_failures_to_safe_diagnostics(
+    status_code, body, expected
+) -> None:
+    class SafeTestError(Exception):
+        pass
+
+    error = SafeTestError("vendor detail and secret must not be persisted")
+    error.status_code = status_code
+    error.body = body
+    client = NativeDeepSeekClient()
+    client.models.list = lambda: (_ for _ in ()).throw(error)
+
+    caps = DeepSeekAdapter(
+        enabled=True, billing_confirmed=True, live_confirmed=True,
+        api_key="secret", client_factory=native_client_factory(client),
+    ).capabilities()
+
+    assert caps.available is False
+    assert caps.diagnostic_code == expected
+    assert "vendor detail" not in caps.model_dump_json()
+
+
+def test_deepseek_reports_model_not_listed_without_vendor_text() -> None:
+    client = NativeDeepSeekClient(model="other-model")
+    caps = DeepSeekAdapter(
+        enabled=True, billing_confirmed=True, live_confirmed=True,
+        api_key="secret", client_factory=native_client_factory(client),
+    ).capabilities()
+    assert caps.diagnostic_code == "deepseek-model-not-listed"
 
 
 def test_cursor_wslenv_contains_only_explicit_allowlisted_keys(monkeypatch: pytest.MonkeyPatch) -> None:

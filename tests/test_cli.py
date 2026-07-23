@@ -377,6 +377,7 @@ def test_deepseek_resume_unavailable_readiness_refuses_before_implementation(
     assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
     assert store.runtime(task.id).repair_attempts == 0
     assert store.recovery_checkpoint(task.id) == checkpoint
+    assert store.outcomes(task.id)["implement"].diagnostic == "deepseek-api-failed"
 
 
 def test_deepseek_resume_probe_budget_refuses_without_probe_or_implementation(
