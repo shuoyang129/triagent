@@ -16,7 +16,7 @@ Use only the `triagent` operator CLI. Never construct or invoke vendor-agent com
 5. In outcome approval mode, present the user outcome, tests, independent review, visual artifacts, residual risk, rollback, and pending approval.
 6. Run approval only after the operator explicitly chooses the named approval action.
 
-The normal DGX non-fake route uses Cursor Composer 2.5 Fast with Auto-review and sandboxing enabled, then Codex verification and independent Antigravity review. DeepSeek/OpenCode remains disabled in the checked-in DGX profile. Treat provider failures as recoverable only when TriAgent says so; inspect the saved diagnostic and resume using the same profile digest and execution provenance. DGX/LAN/Isaac remains Phase B.
+The normal DGX non-fake route uses Cursor Composer 2.5 Fast with Auto-review and sandboxing enabled, then Codex verification and independent Antigravity review. The native OpenAI-compatible DeepSeek fallback remains disabled in the checked-in DGX profile; OpenCode and Cursor custom models are not used. When explicitly enabled, read `DEEPSEEK_API_KEY` only from the environment, use the official API endpoint, provide no shell tool, and accept only controller-validated text changes. Treat provider failures as recoverable only when TriAgent says so; inspect the saved diagnostic and resume using the same profile digest and execution provenance. DGX/LAN/Isaac remains Phase B.
 
 Before normal Cursor work on DGX, verify the narrowly scoped AppArmor support from `/home/ys/works/robots/triagent`: run `bash scripts/install-cursor-sandbox-apparmor.sh --check`, refresh authorization with `sudo -v`, then run `bash scripts/install-cursor-sandbox-apparmor.sh --apply`.
 

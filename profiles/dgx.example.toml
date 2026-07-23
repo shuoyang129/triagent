@@ -24,9 +24,10 @@ command = ["cursor-agent"]
 [agents.antigravity]
 command = ["agy"]
 
-[agents.opencode]
+[agents.deepseek]
 enabled = false
-command = ["opencode"]
+model = "deepseek-v4-flash"
+base_url = "https://api.deepseek.com"
 
 [budget]
 cursor_saver_threshold = 0.70

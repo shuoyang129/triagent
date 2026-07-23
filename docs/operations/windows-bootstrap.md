@@ -6,7 +6,7 @@
 - Codex CLI: `codex`
 - Cursor CLI: Ubuntu 24.04 WSL, `~/.local/bin/cursor-agent`
 - Antigravity CLI: `%LOCALAPPDATA%/agy/bin/agy.exe`
-- OpenCode: optional and disabled by default
+- DeepSeek Python SDK fallback: optional and disabled by default; OpenCode is not used
 
 ## Authentication
 

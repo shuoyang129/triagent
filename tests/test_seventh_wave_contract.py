@@ -107,20 +107,18 @@ def test_antigravity_injected_acl_contract_is_platform_independent(tmp_path, mon
     assert runner.calls == []
 
 
-def test_cursor_paid_probe_uses_documented_print_json_envelope_argv(tmp_path):
+def test_cursor_capabilities_never_probe_models_or_run_paid_smoke(tmp_path):
     class ProbeRunner:
         def __init__(self): self.calls = []
         def run(self, argv, cwd, timeout, env, stdin=None):
             self.calls.append(list(argv))
             if "--version" in argv: return ProcessResult(0, "1.0", "", False)
             if "status" in argv: return ProcessResult(0, "ok", "", False)
-            if "models" in argv: return ProcessResult(0, json.dumps({"models": ["deepseek-v3"]}), "", False)
-            contract = json.loads(argv[-1].split("TRIAGENT_SENTINEL=", 1)[1])
-            Path(contract["path"]).write_text(contract["nonce"], encoding="utf-8")
-            return ProcessResult(0, "", "", False)
+            raise AssertionError("unexpected Cursor probe")
     runner = ProbeRunner()
-    CursorAdapter(runner=runner, command=["cursor-agent"], deepseek_billing_confirmed=True, probe_dir=tmp_path).capabilities()
-    assert runner.calls[-1][1:4] == ["--print", "--output-format", "json"]
+    capability = CursorAdapter(runner=runner, command=["cursor-agent"]).capabilities()
+    assert capability.available is True
+    assert runner.calls == [["cursor-agent", "--version"], ["cursor-agent", "status"]]
 
 
 def _init_repo(path: Path) -> str:

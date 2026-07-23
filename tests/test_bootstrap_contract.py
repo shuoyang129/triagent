@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 
-REQUIRED_TOOLS = {"python", "git", "codex", "cursor", "antigravity", "opencode"}
+REQUIRED_TOOLS = {"python", "git", "codex", "cursor", "antigravity", "deepseek"}
 REQUIRED_FIELDS = {"installed", "version", "authenticated", "headless"}
 
 

@@ -142,7 +142,8 @@ command=["agy"]
 estimated_usd=0.5
 [agents.deepseek]
 enabled={str(deepseek).lower()}
-command=["deepseek"]
+model="deepseek-v4-flash"
+base_url="https://api.deepseek.com"
 estimated_usd=0.5
 probe_estimated_usd=0.25
 ''', encoding="utf-8")
@@ -221,33 +222,37 @@ def test_deepseek_origin_resume_reconstructs_deepseek_not_cursor(tmp_path: Path,
     assert constructed == ["deepseek"]
 
 
-class DeepSeekResumeRunner:
-    def __init__(self, *, available: bool = True) -> None:
+class DeepSeekResumeClient:
+    def __init__(self, store, task_id, *, available: bool = True) -> None:
+        self.store = store
+        self.task_id = task_id
         self.available = available
-        self.calls: list[list[str]] = []
+        self.calls = []
         self.implementation_calls = 0
+        self.smoke_complete = False
+        self.models = type("Models", (), {"list": self.list_models})()
+        self.chat = type("Chat", (), {"completions": type("Completions", (), {"create": self.create})()})()
 
-    def run(self, argv, cwd, timeout, env_allowlist, stdin=None):
-        argv = list(argv)
-        self.calls.append(argv)
-        if argv[-1] == "--version":
-            return ProcessResult(0 if self.available else 1, "opencode 1", "", False)
-        if "probe" in argv:
-            return ProcessResult(0, '{"reachable":true}', "", False)
-        if "models" in argv:
-            return ProcessResult(0, '{"models":["deepseek/deepseek-chat"]}', "", False)
-        prompt = argv[-1]
-        match = re.search(r"TRIAGENT_SENTINEL=(\{.*\})", prompt)
-        if match:
-            contract = json.loads(match.group(1))
-            Path(contract["path"]).write_text(contract["nonce"], encoding="utf-8")
-            return ProcessResult(0, "sentinel", "", False)
-        self.implementation_calls += 1
-        (Path(cwd) / "candidate.txt").write_text("candidate", encoding="utf-8")
-        return ProcessResult(0, json.dumps({
-            "status": "passed", "evidence": [], "artifacts": [],
-            "changed_paths": ["candidate.txt"], "actual_usd": .1,
-        }), "", False)
+    def _observe(self):
+        with self.store._connect() as connection:
+            row = connection.execute("SELECT lease_owner FROM task_runtime WHERE task_id=?", (self.task_id,)).fetchone()
+        self.calls.append(row["lease_owner"] if row else None)
+
+    def list_models(self):
+        self._observe()
+        if not self.available:
+            raise RuntimeError("unavailable")
+        return type("Response", (), {"data": [type("Model", (), {"id": "deepseek-v4-flash"})()]})()
+
+    def create(self, **kwargs):
+        self._observe()
+        if not self.smoke_complete:
+            content = json.dumps({"status": "ok"})
+            self.smoke_complete = True
+        else:
+            content = json.dumps({"status": "passed", "evidence": [], "artifacts": [], "changes": [{"path": "candidate.txt", "action": "write", "content": "candidate"}]})
+            self.implementation_calls += 1
+        return type("Response", (), {"choices": [type("Choice", (), {"message": type("Message", (), {"content": content})()})()]})()
 
 
 class ResumeStageRunner:
@@ -311,18 +316,7 @@ def test_deepseek_implementation_resume_passes_billed_readiness_and_uses_same_ad
 ) -> None:
     profile = tmp_path / "deepseek.toml"
     store, task = _deepseek_resume_task(tmp_path, profile)
-    lease_states: list[str | None] = []
-
-    class LeaseObservingRunner(DeepSeekResumeRunner):
-        def run(self, argv, cwd, timeout, env_allowlist, stdin=None):
-            with store._connect() as connection:
-                row = connection.execute(
-                    "SELECT lease_owner FROM task_runtime WHERE task_id=?", (task.id,)
-                ).fetchone()
-            lease_states.append(row["lease_owner"])
-            return super().run(argv, cwd, timeout, env_allowlist, stdin)
-
-    deepseek_runner = LeaseObservingRunner()
+    deepseek_client = DeepSeekResumeClient(store, task.id)
     monkeypatch.setattr(
         cli_module, "CursorAdapter",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Cursor constructed")),
@@ -330,7 +324,7 @@ def test_deepseek_implementation_resume_passes_billed_readiness_and_uses_same_ad
     monkeypatch.setattr(
         cli_module, "DeepSeekAdapter",
         lambda *args, **kwargs: RealDeepSeekAdapter(
-            runner=deepseek_runner, probe_dir=tmp_path, *args, **kwargs
+            client_factory=lambda **factory_kwargs: deepseek_client, api_key="secret", *args, **kwargs
         ),
     )
     monkeypatch.setattr(
@@ -354,9 +348,9 @@ def test_deepseek_implementation_resume_passes_billed_readiness_and_uses_same_ad
 
     assert result.exit_code == 0, result.output
     assert store.load(task.id).state is TaskState.APPROVAL
-    assert deepseek_runner.implementation_calls == 1
+    assert deepseek_client.implementation_calls == 1
     assert store.runtime(task.id).agent_calls == 4
-    assert lease_states and all(owner is not None for owner in lease_states)
+    assert deepseek_client.calls and all(owner is not None for owner in deepseek_client.calls)
 
 
 def test_deepseek_resume_unavailable_readiness_refuses_before_implementation(
@@ -365,11 +359,11 @@ def test_deepseek_resume_unavailable_readiness_refuses_before_implementation(
     profile = tmp_path / "deepseek.toml"
     store, task = _deepseek_resume_task(tmp_path, profile)
     checkpoint = store.recovery_checkpoint(task.id)
-    deepseek_runner = DeepSeekResumeRunner(available=False)
+    deepseek_client = DeepSeekResumeClient(store, task.id, available=False)
     monkeypatch.setattr(
         cli_module, "DeepSeekAdapter",
         lambda *args, **kwargs: RealDeepSeekAdapter(
-            runner=deepseek_runner, probe_dir=tmp_path, *args, **kwargs
+            client_factory=lambda **factory_kwargs: deepseek_client, api_key="secret", *args, **kwargs
         ),
     )
 
@@ -379,7 +373,7 @@ def test_deepseek_resume_unavailable_readiness_refuses_before_implementation(
     ])
 
     assert result.exit_code != 0
-    assert deepseek_runner.implementation_calls == 0
+    assert deepseek_client.implementation_calls == 0
     assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
     assert store.runtime(task.id).repair_attempts == 0
     assert store.recovery_checkpoint(task.id) == checkpoint
@@ -391,11 +385,11 @@ def test_deepseek_resume_probe_budget_refuses_without_probe_or_implementation(
     profile = tmp_path / "deepseek.toml"
     store, task = _deepseek_resume_task(tmp_path, profile, max_usd=.1)
     checkpoint = store.recovery_checkpoint(task.id)
-    deepseek_runner = DeepSeekResumeRunner()
+    deepseek_client = DeepSeekResumeClient(store, task.id)
     monkeypatch.setattr(
         cli_module, "DeepSeekAdapter",
         lambda *args, **kwargs: RealDeepSeekAdapter(
-            runner=deepseek_runner, probe_dir=tmp_path, *args, **kwargs
+            client_factory=lambda **factory_kwargs: deepseek_client, api_key="secret", *args, **kwargs
         ),
     )
 
@@ -405,7 +399,7 @@ def test_deepseek_resume_probe_budget_refuses_without_probe_or_implementation(
     ])
 
     assert result.exit_code != 0
-    assert deepseek_runner.calls == []
+    assert deepseek_client.calls == []
     assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
     assert store.runtime(task.id).repair_attempts == 0
     assert store.recovery_checkpoint(task.id) == checkpoint
@@ -419,11 +413,11 @@ def test_deepseek_resume_one_remaining_call_slot_refuses_before_probe(
         tmp_path, profile, max_agent_calls=1
     )
     checkpoint = store.recovery_checkpoint(task.id)
-    deepseek_runner = DeepSeekResumeRunner()
+    deepseek_client = DeepSeekResumeClient(store, task.id)
     monkeypatch.setattr(
         cli_module, "DeepSeekAdapter",
         lambda *args, **kwargs: RealDeepSeekAdapter(
-            runner=deepseek_runner, probe_dir=tmp_path, *args, **kwargs
+            client_factory=lambda **factory_kwargs: deepseek_client, api_key="secret", *args, **kwargs
         ),
     )
 
@@ -433,7 +427,7 @@ def test_deepseek_resume_one_remaining_call_slot_refuses_before_probe(
     ])
 
     assert result.exit_code != 0
-    assert deepseek_runner.calls == []
+    assert deepseek_client.calls == []
     assert store.runtime(task.id).agent_calls == 0
     assert store.runtime(task.id).repair_attempts == 0
     assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
@@ -446,11 +440,11 @@ def test_deepseek_resume_combined_usd_shortfall_refuses_before_probe(
     profile = tmp_path / "deepseek.toml"
     store, task = _deepseek_resume_task(tmp_path, profile, max_usd=.6)
     checkpoint = store.recovery_checkpoint(task.id)
-    deepseek_runner = DeepSeekResumeRunner()
+    deepseek_client = DeepSeekResumeClient(store, task.id)
     monkeypatch.setattr(
         cli_module, "DeepSeekAdapter",
         lambda *args, **kwargs: RealDeepSeekAdapter(
-            runner=deepseek_runner, probe_dir=tmp_path, *args, **kwargs
+            client_factory=lambda **factory_kwargs: deepseek_client, api_key="secret", *args, **kwargs
         ),
     )
 
@@ -460,7 +454,7 @@ def test_deepseek_resume_combined_usd_shortfall_refuses_before_probe(
     ])
 
     assert result.exit_code != 0
-    assert deepseek_runner.calls == []
+    assert deepseek_client.calls == []
     assert store.runtime(task.id).agent_calls == 0
     assert store.runtime(task.id).repair_attempts == 0
     assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
@@ -471,12 +465,12 @@ def test_stale_same_stage_deepseek_resume_loser_makes_no_paid_probe(tmp_path: Pa
     profile = tmp_path / "deepseek.toml"
     store, task = _deepseek_resume_task(tmp_path, profile)
     expected = store.recovery_checkpoint(task.id)
-    deepseek_runner = DeepSeekResumeRunner()
+    deepseek_client = DeepSeekResumeClient(store, task.id)
     config = tomllib.loads(profile.read_text(encoding="utf-8"))
     orchestrator = Orchestrator(
         store,
         RealDeepSeekAdapter(
-            runner=deepseek_runner, probe_dir=tmp_path, command=["deepseek"],
+            client_factory=lambda **factory_kwargs: deepseek_client, api_key="secret",
             enabled=True, billing_confirmed=True, live_confirmed=True, estimated_usd=.2,
         ),
         RealCodexAdapter(runner=ResumeStageRunner("verify"), command=["codex"], estimated_usd=.1),
@@ -495,7 +489,7 @@ def test_stale_same_stage_deepseek_resume_loser_makes_no_paid_probe(tmp_path: Pa
     with pytest.raises(ValueError, match="checkpoint changed"):
         orchestrator.resume_until_blocked(task.id)
 
-    assert deepseek_runner.calls == []
+    assert deepseek_client.calls == []
     assert store.runtime(task.id).agent_calls == 0
     assert store.load(task.id).state is TaskState.FAILED_RECOVERABLE
     assert store.recovery_checkpoint(task.id)["sequence"] > expected["sequence"]
@@ -636,9 +630,10 @@ command = ["custom-codex"]
 command = ["custom-cursor"]
 [agents.antigravity]
 command = ["custom-agy"]
-[agents.opencode]
+[agents.deepseek]
 enabled = false
-command = ["custom-opencode"]
+model = "deepseek-v4-flash"
+base_url = "https://api.deepseek.com"
 """.strip(),
         encoding="utf-8",
     )
@@ -647,10 +642,12 @@ command = ["custom-opencode"]
 
     def adapter(name: str, *, installed: bool, authenticated: bool | None, ready: bool | None):
         class Stub:
-            def __init__(self, *args, command, **kwargs):
-                commands[name] = list(command)
-                if name == "opencode/deepseek":
-                    assert kwargs["probe_installed"] is True
+            def __init__(self, *args, command=None, **kwargs):
+                if command is not None:
+                    commands[name] = list(command)
+                if name == "deepseek":
+                    assert kwargs["model"] == "deepseek-v4-flash"
+                    assert kwargs["base_url"] == "https://api.deepseek.com"
 
             def capabilities(self):
                 calls.append(name)
@@ -665,17 +662,16 @@ command = ["custom-opencode"]
     monkeypatch.setattr(cli_module, "CodexAdapter", adapter("codex", installed=True, authenticated=True, ready=True))
     monkeypatch.setattr(cli_module, "CursorAdapter", adapter("cursor", installed=False, authenticated=False, ready=False))
     monkeypatch.setattr(cli_module, "AntigravityAdapter", adapter("antigravity", installed=True, authenticated=None, ready=None))
-    monkeypatch.setattr(cli_module, "DeepSeekAdapter", adapter("opencode/deepseek", installed=None, authenticated=None, ready=False))
+    monkeypatch.setattr(cli_module, "DeepSeekAdapter", adapter("deepseek", installed=None, authenticated=None, ready=False))
 
     result = runner.invoke(app, ["doctor", "--profile", str(profile)])
 
     assert result.exit_code == 0, result.output
-    assert calls == ["codex", "cursor", "antigravity", "opencode/deepseek"]
+    assert calls == ["codex", "cursor", "antigravity", "deepseek"]
     assert commands == {
         "codex": ["custom-codex"],
         "cursor": ["custom-cursor"],
         "antigravity": ["custom-agy"],
-        "opencode/deepseek": ["custom-opencode"],
     }
     for name in calls:
         assert name in result.output.lower()

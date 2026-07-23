@@ -185,6 +185,9 @@ def test_resume_value_error_after_checkpoint_acceptance_restores_recoverable_sta
     [
         "agy-empty-output",
         "cursor-result-non-json",
+        "deepseek-api-failed",
+        "deepseek-local-failure",
+        "deepseek-patch-invalid",
         "json-malformed",
         "json-non-object",
     ],

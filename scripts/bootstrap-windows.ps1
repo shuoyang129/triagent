@@ -40,8 +40,8 @@ $cursorAuth = Invoke-Probe { wsl -d Ubuntu-24.04 -- bash -lc '~/.local/bin/curso
 $agyPath = Join-Path $env:LOCALAPPDATA "agy/bin/agy.exe"
 $antigravity = Invoke-Probe { & $agyPath --version }
 $antigravityConfig = Test-Path (Join-Path $env:USERPROFILE ".gemini/antigravity-cli/settings.json")
-$opencodeCommand = Get-Command opencode -ErrorAction SilentlyContinue
-$opencode = if ($opencodeCommand) { Invoke-Probe { opencode --version } } else { @{ ok = $false; text = "" } }
+$deepseekSdk = Invoke-Probe { & $pythonPath -c "import openai; print(openai.__version__)" }
+$deepseekConfigured = -not [string]::IsNullOrWhiteSpace($env:DEEPSEEK_API_KEY)
 
 $payload = [ordered]@{
     generated_at = [DateTimeOffset]::UtcNow.ToString("o")
@@ -52,7 +52,7 @@ $payload = [ordered]@{
         codex = New-Capability $codex.ok $codex.text $codexAuth.ok $true
         cursor = New-Capability $cursor.ok $cursor.text ($cursorAuth.ok -and $cursorAuth.text -match "Logged in") $true
         antigravity = New-Capability $antigravity.ok $antigravity.text ($antigravityConfig -and $antigravity.ok) $true
-        opencode = New-Capability $opencode.ok $(if ($opencode.ok) { $opencode.text } else { $null }) $false $true
+        deepseek = New-Capability $deepseekSdk.ok $(if ($deepseekSdk.ok) { $deepseekSdk.text } else { $null }) $deepseekConfigured $true
     }
 }
 

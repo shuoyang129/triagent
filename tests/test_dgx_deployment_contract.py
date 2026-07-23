@@ -46,7 +46,13 @@ def test_concrete_dgx_profile_uses_verified_paths_and_budgets() -> None:
     assert config["agents"]["antigravity"]["command"] == [
         "/home/ys/works/robots/triagent/scripts/agy-review-adapter.zsh"
     ]
-    assert config["agents"]["opencode"]["enabled"] is False
+    assert config["agents"]["deepseek"] == {
+        "enabled": False,
+        "model": "deepseek-v4-flash",
+        "base_url": "https://api.deepseek.com",
+        "estimated_usd": 1.0,
+        "probe_estimated_usd": 0.25,
+    }
     assert config["budget"]["max_agent_calls"] == 20
     assert config["budget"]["max_minutes"] == 60
     assert config["budget"]["max_usd"] == 20.0

@@ -32,7 +32,7 @@ flowchart LR
 - 已验证的顺序是 Cursor 实现、Codex 验证、Antigravity 审查。
 - 任务会使用独立 Git worktree，不直接在原始项目目录里试改。
 - 任务状态、事件、候选代码和最终报告都会持久保存。
-- DeepSeek/OpenCode 目前默认关闭，没有发生调用。
+- 原生 DeepSeek Python fallback 目前默认关闭，没有发生调用。
 
 ### 当前还不能当作已经可用的部分
 
@@ -486,23 +486,22 @@ Cursor 通常消耗最大，因为它负责阅读项目、实现、测试和修�
 
 ### 12.3 DeepSeek 当前真实状态
 
-目前 `D:\workspace\profiles\windows.example.toml` 中的备用项是：
+TriAgent 已改为原生 OpenAI-compatible Python SDK fallback，不再使用 Cursor Custom Model 或 OpenCode。默认 profile 仍保持关闭：
 
 ```toml
-[agents.opencode]
+[agents.deepseek]
 enabled = false
-command = ["opencode"]
+model = "deepseek-v4-flash"
+base_url = "https://api.deepseek.com"
+estimated_usd = 1.0
+probe_estimated_usd = 0.25
 ```
 
-这表示：
+启用前必须由操作者在进程环境中设置 `DEEPSEEK_API_KEY`，并将 `enabled` 改为 `true`。密钥不能写入 TOML、任务提示或日志。真实 `run`/`resume` 仍必须显式传入 `--live-confirmed --billing-confirmed`；readiness probe 和实现调用都会先占用控制器预算。
 
-- OpenCode 没有启用。
-- DeepSeek API 没有投入真实运行。
-- Cursor Pro 额度用尽时，当前系统不会无缝自动切换。
-- 同一个已开始的任务具有不可变执行来源，不能在恢复时从 Cursor 换成 DeepSeek。
-- 配置中的 70%/90% 阈值目前不能当作已经生效的实时额度监控。
+原生 adapter 不给模型 shell 或任意工具权限。它只提供大小受限的 Git 跟踪 UTF-8 文本快照，并只接受结构化相对路径 `write`/`delete` 操作；本地控制器会拒绝绝对路径、`..`、`.git`、符号链接、重复路径、超量或超大变更，再原子写入。最终候选仍经过 scope/forbidden、Codex 验证和 Antigravity 审查。
 
-如果 Cursor 额度不足，当前安全做法是停止重试、保留任务分支和报告，让主代理先判断是等待额度恢复、缩小任务，还是另行启用并小额验证 DeepSeek。不要直接编辑任务数据库或伪造代理来源。
+DeepSeek 只能在创建任务时被选为实现器；同一个已开始任务的执行来源和 profile digest 不可变，不能在恢复时从 Cursor 偷换成 DeepSeek。当前路由只有在 Cursor readiness 不可用且 DeepSeek 已显式启用并通过付费 readiness 时才会选择它；Cursor 运行中途额度错误的自动重路由仍需另行实现和验证。
 
 ## 13. 为什么有时 Cursor 和 Antigravity 额度没有变化
 
@@ -739,7 +738,7 @@ $DataRoot = "D:\workspace\runs\production"
 - 验证：Codex，测试 `2 passed`。
 - 审查：Antigravity，`clean`，没有发现问题。
 - 三个供应商阶段共完成 3 次调用，控制器估算 3 美元。
-- DeepSeek/OpenCode 未启用、未调用。
+- 原生 DeepSeek fallback 未启用、未调用。
 - 待审批：`outcome`、`merge`。
 - 报告：`D:\workspace\runs\live-smoke-v4\runs\9d75a0a5-4256-4e21-8eb6-a82430ec9b91\final-report.md`
 

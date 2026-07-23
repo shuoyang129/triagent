@@ -121,9 +121,10 @@ estimated_usd=0.5
 [agents.antigravity]
 command=["agy"]
 estimated_usd=0.5
-[agents.opencode]
+[agents.deepseek]
 enabled=true
-command=["opencode"]
+model="deepseek-v4-flash"
+base_url="https://api.deepseek.com"
 estimated_usd=0.5
 probe_estimated_usd=0.25
 [budget]

@@ -18,9 +18,10 @@ estimated_usd = 1.0
 command = ["C:/Users/yangs/AppData/Local/agy/bin/agy.exe"]
 estimated_usd = 1.0
 
-[agents.opencode]
+[agents.deepseek]
 enabled = false
-command = ["opencode"]
+model = "deepseek-v4-flash"
+base_url = "https://api.deepseek.com"
 estimated_usd = 1.0
 probe_estimated_usd = 0.25
 

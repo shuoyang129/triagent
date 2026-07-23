@@ -323,51 +323,15 @@ def test_cursor_still_rejects_invalid_outer_envelope(agent_request: AgentRequest
     assert result.data == {"diagnostic_code": "cursor-envelope-invalid"}
 
 
-def test_cursor_does_not_probe_models_or_smoke_without_billing_confirmation(tmp_path: Path) -> None:
-    runner = FakeRunner(
-        completed("cursor-agent 1"),
-        completed("authenticated"),
-    )
-    caps = CursorAdapter(runner=runner, deepseek_billing_confirmed=False, probe_dir=tmp_path).capabilities()
-    assert caps.deepseek_model_listed is False
-    assert caps.deepseek_agent_smoke_test is False
-    assert caps.deepseek_billing_confirmed is False
-    assert caps.deepseek_byok_available is False
+def test_cursor_capabilities_never_receive_deepseek_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CURSOR_API_KEY", "cursor-secret")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+    runner = FakeRunner(completed("cursor-agent 1"), completed("authenticated"))
+    caps = CursorAdapter(runner=runner).capabilities()
+    assert caps.available is True
     assert len(runner.calls) == 2
-    assert list(tmp_path.iterdir()) == []
-
-
-def test_cursor_self_claimed_evidence_without_sentinel_file_fails(tmp_path: Path) -> None:
-    runner = FakeRunner(completed("cursor-agent 1"), completed("authenticated"), completed('{"models":["deepseek-v3"]}'), completed('{"summary":"claimed success"}'))
-    caps = CursorAdapter(runner=runner, deepseek_billing_confirmed=True, probe_dir=tmp_path).capabilities()
-    assert caps.deepseek_agent_smoke_test is False
-    assert caps.deepseek_byok_available is False
-
-
-def test_cursor_smoke_verifies_actual_sentinel_file_and_cleans_up(tmp_path: Path) -> None:
-    runner = SentinelRunner(completed("cursor-agent 1"), completed("authenticated"), completed('{"models":["deepseek-v3"]}'), completed("ignored"))
-    caps = CursorAdapter(runner=runner, deepseek_billing_confirmed=True, probe_dir=tmp_path).capabilities()
-    assert caps.deepseek_agent_smoke_test is True
-    assert caps.deepseek_byok_available is True
-    assert list(tmp_path.iterdir()) == []
-
-
-def test_sentinel_directory_at_target_fails_without_cleanup_exception(tmp_path: Path) -> None:
-    runner = DirectorySentinelRunner(completed("cursor-agent 1"), completed("authenticated"), completed('{"models":["deepseek-v3"]}'), completed("ignored"))
-    caps = CursorAdapter(runner=runner, deepseek_billing_confirmed=True, probe_dir=tmp_path).capabilities()
-    assert caps.deepseek_agent_smoke_test is False
-
-
-def test_sentinel_unlink_failure_forces_smoke_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = SentinelRunner(completed("cursor-agent 1"), completed("authenticated"), completed('{"models":["deepseek-v3"]}'), completed("ignored"))
-    original = Path.unlink
-    def fail_cleanup(path: Path, *args, **kwargs):
-        if path.name.startswith("triagent-probe-") and path.exists():
-            raise PermissionError("locked")
-        return original(path, *args, **kwargs)
-    monkeypatch.setattr(Path, "unlink", fail_cleanup)
-    caps = CursorAdapter(runner=runner, deepseek_billing_confirmed=True, probe_dir=tmp_path).capabilities()
-    assert caps.deepseek_agent_smoke_test is False
+    assert runner.calls[0][3] == {"CURSOR_API_KEY": "cursor-secret", "WSLENV": "CURSOR_API_KEY/u"}
+    assert "deepseek-secret" not in repr(runner.calls)
 
 
 def test_antigravity_print_mode_never_skips_permissions(agent_request: AgentRequest) -> None:
@@ -430,43 +394,46 @@ def test_deepseek_defaults_disabled_without_running_probes() -> None:
     assert runner.calls == []
 
 
-def test_deepseek_doctor_mode_checks_only_configured_executable_when_disabled() -> None:
-    runner = FakeRunner(completed("opencode 2"))
+class NativeDeepSeekClient:
+    def __init__(self, *, model="deepseek-v4-flash", smoke="{\"status\":\"ok\"}"):
+        from types import SimpleNamespace
+        self.models = SimpleNamespace(list=lambda: SimpleNamespace(data=[SimpleNamespace(id=model)]))
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=lambda **kwargs: SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=smoke))])))
 
-    caps = DeepSeekAdapter(runner=runner, command=["/opt/opencode"], probe_installed=True).capabilities()
 
-    assert [call[0] for call in runner.calls] == [["/opt/opencode", "--version"]]
-    assert caps.installed is True
+def native_client_factory(client):
+    return lambda **kwargs: client
+
+
+def test_deepseek_doctor_mode_checks_only_local_sdk_when_disabled() -> None:
+    caps = DeepSeekAdapter().capabilities()
+    assert isinstance(caps.installed, bool)
     assert caps.authenticated is None
     assert caps.ready is False
 
 
-def test_deepseek_without_billing_runs_no_probes_or_mutations(tmp_path: Path) -> None:
-    runner = FakeRunner()
-    caps = DeepSeekAdapter(runner=runner, enabled=True, billing_confirmed=False, probe_dir=tmp_path).capabilities()
+def test_deepseek_without_billing_runs_no_api_calls(tmp_path: Path) -> None:
+    client = NativeDeepSeekClient()
+    caps = DeepSeekAdapter(enabled=True, billing_confirmed=False, api_key="secret", client_factory=native_client_factory(client)).capabilities()
     assert caps.api_configured_reachable is False
     assert caps.model_listed is False
     assert caps.agent_tool_smoke_test is False
     assert caps.billing_confirmed is False
     assert caps.available is False
-    assert runner.calls == []
     assert list(tmp_path.iterdir()) == []
 
 
-def test_deepseek_is_available_when_all_gates_pass(tmp_path: Path) -> None:
-    runner = SentinelRunner(
-        completed("opencode 1"),
-        completed('{"reachable":true}'),
-        completed('{"models":["deepseek/deepseek-chat"]}'),
-        completed("ignored"),
-    )
-    caps = DeepSeekAdapter(runner=runner, enabled=True, billing_confirmed=True, live_confirmed=True, probe_dir=tmp_path).capabilities()
+def test_deepseek_is_available_when_all_gates_pass() -> None:
+    client = NativeDeepSeekClient()
+    caps = DeepSeekAdapter(enabled=True, billing_confirmed=True, live_confirmed=True, api_key="secret", client_factory=native_client_factory(client)).capabilities()
     assert caps.available is True
+    assert caps.model_listed is True
+    assert caps.agent_tool_smoke_test is True
 
 
-def test_deepseek_self_claimed_evidence_without_sentinel_file_fails(tmp_path: Path) -> None:
-    runner = FakeRunner(completed("opencode 1"), completed('{"reachable":true}'), completed('{"models":["deepseek/deepseek-chat"]}'), completed('{"summary":"claimed success"}'))
-    caps = DeepSeekAdapter(runner=runner, enabled=True, billing_confirmed=True, live_confirmed=True, probe_dir=tmp_path).capabilities()
+def test_deepseek_invalid_smoke_response_fails_closed() -> None:
+    client = NativeDeepSeekClient(smoke="{\"claimed\":true}")
+    caps = DeepSeekAdapter(enabled=True, billing_confirmed=True, live_confirmed=True, api_key="secret", client_factory=native_client_factory(client)).capabilities()
     assert caps.agent_tool_smoke_test is False
     assert caps.available is False
 
@@ -476,8 +443,8 @@ def test_cursor_wslenv_contains_only_explicit_allowlisted_keys(monkeypatch: pyte
     monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
     monkeypatch.setenv("UNRELATED_SECRET", "nope")
     runner = FakeRunner(completed("cursor-agent 1"), completed("authenticated"))
-    CursorAdapter(runner=runner, deepseek_billing_confirmed=False).capabilities()
-    expected = {"CURSOR_API_KEY": "cursor-secret", "DEEPSEEK_API_KEY": "deepseek-secret", "WSLENV": "CURSOR_API_KEY/u:DEEPSEEK_API_KEY/u"}
+    CursorAdapter(runner=runner).capabilities()
+    expected = {"CURSOR_API_KEY": "cursor-secret", "WSLENV": "CURSOR_API_KEY/u"}
     assert runner.calls[0][3] == expected
     assert runner.calls[0][0][:5] == ["wsl.exe", "--distribution", "Ubuntu-24.04", "--exec", "bash"]
 
@@ -546,4 +513,4 @@ def test_live_deepseek_requires_explicit_enablement(request: pytest.FixtureReque
         pytest.skip("DEEPSEEK_API_KEY is not configured")
     if os.environ.get("TRIAGENT_DEEPSEEK_BILLING_CONFIRMED") != "1":
         pytest.skip("set TRIAGENT_DEEPSEEK_BILLING_CONFIRMED=1 only after confirming billing ownership")
-    assert isinstance(DeepSeekAdapter(enabled=True, billing_confirmed=True).capabilities().available, bool)
+    assert isinstance(DeepSeekAdapter(enabled=True, billing_confirmed=True, live_confirmed=True).capabilities().available, bool)

@@ -28,9 +28,10 @@ estimated_usd = 1.0
 command = ["/home/ys/works/robots/triagent/scripts/agy-review-adapter.zsh"]
 estimated_usd = 1.0
 
-[agents.opencode]
+[agents.deepseek]
 enabled = false
-command = ["/home/ys/.local/bin/opencode"]
+model = "deepseek-v4-flash"
+base_url = "https://api.deepseek.com"
 estimated_usd = 1.0
 probe_estimated_usd = 0.25
 

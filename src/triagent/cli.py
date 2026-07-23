@@ -76,8 +76,18 @@ def _profile_command(config: dict, name: str) -> list[str]:
 
 def _fallback_profile(config:dict)->tuple[str,bool]:
     agents=config.get("agents",{})
-    name="deepseek" if "deepseek" in agents else "opencode"
-    return name,agents.get(name,{}).get("enabled") is True
+    return "deepseek",agents.get("deepseek",{}).get("enabled") is True
+
+
+def _deepseek_options(config: dict) -> dict[str, str]:
+    section = config.get("agents", {}).get("deepseek", {})
+    model = section.get("model", "deepseek-v4-flash")
+    base_url = section.get("base_url", "https://api.deepseek.com")
+    if not isinstance(model, str) or not model:
+        raise ValueError("invalid DeepSeek model")
+    if not isinstance(base_url, str) or not base_url:
+        raise ValueError("invalid DeepSeek base URL")
+    return {"model": model, "base_url": base_url}
 
 
 def _profile_digest(config: dict) -> str:
@@ -139,7 +149,7 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
         billing_confirmed: Annotated[bool, typer.Option("--billing-confirmed")] = False) -> None:
     if profile != "fake" and not (live_confirmed and billing_confirmed):
         raise typer.BadParameter("real profiles require --live-confirmed and --billing-confirmed")
-    config=None; budget=Budget(); fallback_name="opencode"; fallback_enabled=False; fallback_estimate=None; probe_cost=None
+    config=None; budget=Budget(); fallback_name="deepseek"; fallback_enabled=False; fallback_estimate=None; probe_cost=None
     try:
         if profile != "fake":
             config=tomllib.loads(Path(profile).read_text(encoding="utf-8"))
@@ -148,7 +158,6 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
             for agent in ("cursor","codex","antigravity"):_profile_command(config,agent)
             fallback_name,fallback_enabled=_fallback_profile(config)
             if fallback_enabled:
-                _profile_command(config,fallback_name)
                 fallback_estimate=_priced(config,fallback_name);probe_cost=_priced(config,fallback_name,"probe_estimated_usd")
                 if fallback_estimate is None or fallback_estimate<=0 or probe_cost is None or probe_cost<=0:raise ValueError("invalid fallback cost estimates")
         GitWorkspace.validate(repo)
@@ -172,13 +181,13 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
             orchestrator = Orchestrator(store, FakeAgent([success]), FakeAgent([success]), FakeAgent([success]), profile_digest="fake-v1")
         else:
             assert config is not None
-            cursor = CursorAdapter(command=_profile_command(config, "cursor"), deepseek_billing_confirmed=False, estimated_usd=_priced(config,"cursor"))
+            cursor = CursorAdapter(command=_profile_command(config, "cursor"), estimated_usd=_priced(config,"cursor"))
             codex = CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config,"codex"))
             antigravity = AntigravityAdapter(command=_profile_command(config, "antigravity"), estimated_usd=_priced(config,"antigravity"))
             cursor_caps=cursor.capabilities()  # preferred free/version/auth probe first; no model smoke
             capabilities={"cursor":cursor_caps,"deepseek":False}
             if not cursor_caps.available and fallback_enabled:
-                deepseek=DeepSeekAdapter(command=_profile_command(config,fallback_name),enabled=True,billing_confirmed=billing_confirmed,live_confirmed=live_confirmed,estimated_usd=fallback_estimate)
+                deepseek=DeepSeekAdapter(enabled=True,billing_confirmed=billing_confirmed,live_confirmed=live_confirmed,estimated_usd=fallback_estimate,**_deepseek_options(config))
                 deepseek_caps=store.execute_paid_operation(task.id,probe_cost,deepseek.capabilities)
                 capabilities["deepseek"]=deepseek_caps
             choice = ImplementationRouter().choose(cursor_usage=0.0, capabilities=capabilities)
@@ -244,7 +253,6 @@ def resume(
                 probe_cost = None
                 implementer = CursorAdapter(
                     command=_profile_command(config, "cursor"),
-                    deepseek_billing_confirmed=False,
                     estimated_usd=_priced(config, "cursor"),
                 )
             elif persisted["implementer"] == "deepseek":
@@ -255,9 +263,9 @@ def resume(
                 if fallback_estimate is None or fallback_estimate <= 0:
                     raise ValueError("invalid fallback cost estimate")
                 implementer = DeepSeekAdapter(
-                    command=_profile_command(config, fallback_name), enabled=True,
+                    enabled=True,
                     billing_confirmed=billing_confirmed, live_confirmed=live_confirmed,
-                    estimated_usd=fallback_estimate,
+                    estimated_usd=fallback_estimate, **_deepseek_options(config),
                 )
                 probe_cost = None
                 if recovery_checkpoint[0] == "implement":
@@ -328,12 +336,12 @@ def doctor(profile: Annotated[str, typer.Option()] = "fake") -> None:
     except (OSError, tomllib.TOMLDecodeError) as error:
         raise typer.BadParameter("Cannot read selected profile") from error
 
-    opencode_enabled = bool(config.get("agents", {}).get("opencode", {}).get("enabled", False))
+    deepseek_enabled = bool(config.get("agents", {}).get("deepseek", {}).get("enabled", False))
     probes = (
         ("codex", CodexAdapter(command=_profile_command(config, "codex"))),
-        ("cursor", CursorAdapter(command=_profile_command(config, "cursor"), deepseek_billing_confirmed=False)),
+        ("cursor", CursorAdapter(command=_profile_command(config, "cursor"))),
         ("antigravity", AntigravityAdapter(command=_profile_command(config, "antigravity"))),
-        ("opencode/deepseek", DeepSeekAdapter(command=_profile_command(config, "opencode"), enabled=opencode_enabled, billing_confirmed=False, probe_installed=True)),
+        ("deepseek", DeepSeekAdapter(enabled=deepseek_enabled, billing_confirmed=False, **_deepseek_options(config))),
     )
     typer.echo(f"Profile: {profile_path}")
     for name, adapter in probes:
