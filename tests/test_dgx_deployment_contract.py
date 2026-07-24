@@ -41,7 +41,7 @@ def test_concrete_dgx_profile_uses_verified_paths_and_budgets() -> None:
         "--sandbox",
         "enabled",
         "--model",
-        "composer-2.5-fast",
+        "auto",
     ]
     assert config["agents"]["antigravity"]["command"] == [
         "/home/ys/works/robots/triagent/scripts/agy-review-adapter.zsh"
@@ -76,6 +76,7 @@ def test_synthetic_force_profile_is_strictly_isolated() -> None:
         "enabled",
         "--model",
     ]
+    assert command[5] == "auto"
     assert "--auto-review" not in command
     assert "--yolo" not in command
     wrapper = FORCE_ADAPTER.read_text(encoding="utf-8")

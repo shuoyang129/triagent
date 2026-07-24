@@ -21,7 +21,7 @@ command = ["/home/ys/works/robots/triagent/scripts/codex-verify-adapter.zsh"]
 estimated_usd = 1.0
 
 [agents.cursor]
-command = ["/home/ys/works/robots/triagent/scripts/cursor-synthetic-force-adapter.zsh", "--force", "--sandbox", "enabled", "--model", "composer-2.5-fast"]
+command = ["/home/ys/works/robots/triagent/scripts/cursor-synthetic-force-adapter.zsh", "--force", "--sandbox", "enabled", "--model", "auto"]
 estimated_usd = 1.0
 
 [agents.antigravity]
