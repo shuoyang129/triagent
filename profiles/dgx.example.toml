@@ -26,8 +26,8 @@ command = ["agy"]
 
 [agents.deepseek]
 enabled = false
-model = "deepseek-v4-flash"
-base_url = "https://api.deepseek.com"
+model = "deepseek/deepseek-v4-pro"
+command = ["/home/operator/.opencode/bin/opencode"]
 
 [budget]
 cursor_saver_threshold = 0.70

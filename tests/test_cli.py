@@ -141,9 +141,9 @@ estimated_usd=0.5
 command=["agy"]
 estimated_usd=0.5
 [agents.deepseek]
+command=["opencode"]
 enabled={str(deepseek).lower()}
-model="deepseek-v4-flash"
-base_url="https://api.deepseek.com"
+model="deepseek/deepseek-v4-pro"
 estimated_usd=0.5
 probe_estimated_usd=0.25
 ''', encoding="utf-8")
@@ -229,30 +229,30 @@ class DeepSeekResumeClient:
         self.available = available
         self.calls = []
         self.implementation_calls = 0
-        self.smoke_complete = False
-        self.models = type("Models", (), {"list": self.list_models})()
-        self.chat = type("Chat", (), {"completions": type("Completions", (), {"create": self.create})()})()
 
     def _observe(self):
         with self.store._connect() as connection:
             row = connection.execute("SELECT lease_owner FROM task_runtime WHERE task_id=?", (self.task_id,)).fetchone()
         self.calls.append(row["lease_owner"] if row else None)
 
-    def list_models(self):
+    def run(self, argv, cwd, timeout, env_allowlist, stdin=None):
         self._observe()
-        if not self.available:
-            raise RuntimeError("unavailable")
-        return type("Response", (), {"data": [type("Model", (), {"id": "deepseek-v4-flash"})()]})()
-
-    def create(self, **kwargs):
-        self._observe()
-        if not self.smoke_complete:
-            content = json.dumps({"status": "ok"})
-            self.smoke_complete = True
-        else:
-            content = json.dumps({"status": "passed", "evidence": [], "artifacts": [], "changes": [{"path": "candidate.txt", "action": "write", "content": "candidate"}]})
-            self.implementation_calls += 1
-        return type("Response", (), {"choices": [type("Choice", (), {"message": type("Message", (), {"content": content})()})()]})()
+        if argv[-1] == "--version":
+            return ProcessResult(0, "1.18.4", "", False)
+        if "models" in argv:
+            if not self.available:
+                return ProcessResult(1, "", "provider unavailable", False)
+            return ProcessResult(0, "deepseek/deepseek-v4-pro\n", "", False)
+        if "triagent-opencode-probe-" in argv[-1]:
+            path = json.loads(re.search(r'PATH_JSON=(".*?") NONCE=', argv[-1]).group(1))
+            nonce = argv[-1].split(" NONCE=", 1)[1]
+            Path(path).write_text(nonce, encoding="utf-8")
+            return ProcessResult(0, "", "", False)
+        (Path(cwd) / "candidate.txt").write_text("candidate", encoding="utf-8")
+        self.implementation_calls += 1
+        payload = {"status": "passed", "evidence": [], "artifacts": [], "changed_paths": ["candidate.txt"]}
+        event = {"type": "text", "part": {"type": "text", "text": json.dumps(payload)}}
+        return ProcessResult(0, json.dumps(event), "", False)
 
 
 class ResumeStageRunner:
@@ -317,6 +317,7 @@ def test_deepseek_implementation_resume_passes_billed_readiness_and_uses_same_ad
     profile = tmp_path / "deepseek.toml"
     store, task = _deepseek_resume_task(tmp_path, profile)
     deepseek_client = DeepSeekResumeClient(store, task.id)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret")
     monkeypatch.setattr(
         cli_module, "CursorAdapter",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Cursor constructed")),
@@ -324,7 +325,7 @@ def test_deepseek_implementation_resume_passes_billed_readiness_and_uses_same_ad
     monkeypatch.setattr(
         cli_module, "DeepSeekAdapter",
         lambda *args, **kwargs: RealDeepSeekAdapter(
-            client_factory=lambda **factory_kwargs: deepseek_client, api_key="secret", *args, **kwargs
+            runner=deepseek_client, probe_dir=tmp_path / "probe", *args, **kwargs
         ),
     )
     monkeypatch.setattr(
@@ -360,10 +361,11 @@ def test_deepseek_resume_unavailable_readiness_refuses_before_implementation(
     store, task = _deepseek_resume_task(tmp_path, profile)
     checkpoint = store.recovery_checkpoint(task.id)
     deepseek_client = DeepSeekResumeClient(store, task.id, available=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret")
     monkeypatch.setattr(
         cli_module, "DeepSeekAdapter",
         lambda *args, **kwargs: RealDeepSeekAdapter(
-            client_factory=lambda **factory_kwargs: deepseek_client, api_key="secret", *args, **kwargs
+            runner=deepseek_client, probe_dir=tmp_path / "probe", *args, **kwargs
         ),
     )
 
@@ -390,7 +392,7 @@ def test_deepseek_resume_probe_budget_refuses_without_probe_or_implementation(
     monkeypatch.setattr(
         cli_module, "DeepSeekAdapter",
         lambda *args, **kwargs: RealDeepSeekAdapter(
-            client_factory=lambda **factory_kwargs: deepseek_client, api_key="secret", *args, **kwargs
+            runner=deepseek_client, probe_dir=tmp_path / "probe", *args, **kwargs
         ),
     )
 
@@ -418,7 +420,7 @@ def test_deepseek_resume_one_remaining_call_slot_refuses_before_probe(
     monkeypatch.setattr(
         cli_module, "DeepSeekAdapter",
         lambda *args, **kwargs: RealDeepSeekAdapter(
-            client_factory=lambda **factory_kwargs: deepseek_client, api_key="secret", *args, **kwargs
+            runner=deepseek_client, probe_dir=tmp_path / "probe", *args, **kwargs
         ),
     )
 
@@ -445,7 +447,7 @@ def test_deepseek_resume_combined_usd_shortfall_refuses_before_probe(
     monkeypatch.setattr(
         cli_module, "DeepSeekAdapter",
         lambda *args, **kwargs: RealDeepSeekAdapter(
-            client_factory=lambda **factory_kwargs: deepseek_client, api_key="secret", *args, **kwargs
+            runner=deepseek_client, probe_dir=tmp_path / "probe", *args, **kwargs
         ),
     )
 
@@ -471,7 +473,7 @@ def test_stale_same_stage_deepseek_resume_loser_makes_no_paid_probe(tmp_path: Pa
     orchestrator = Orchestrator(
         store,
         RealDeepSeekAdapter(
-            client_factory=lambda **factory_kwargs: deepseek_client, api_key="secret",
+            runner=deepseek_client,
             enabled=True, billing_confirmed=True, live_confirmed=True, estimated_usd=.2,
         ),
         RealCodexAdapter(runner=ResumeStageRunner("verify"), command=["codex"], estimated_usd=.1),
@@ -633,8 +635,8 @@ command = ["custom-cursor"]
 command = ["custom-agy"]
 [agents.deepseek]
 enabled = false
-model = "deepseek-v4-flash"
-base_url = "https://api.deepseek.com"
+model = "deepseek/deepseek-v4-pro"
+command = ["custom-opencode"]
 """.strip(),
         encoding="utf-8",
     )
@@ -647,8 +649,7 @@ base_url = "https://api.deepseek.com"
                 if command is not None:
                     commands[name] = list(command)
                 if name == "deepseek":
-                    assert kwargs["model"] == "deepseek-v4-flash"
-                    assert kwargs["base_url"] == "https://api.deepseek.com"
+                    assert kwargs["model"] == "deepseek/deepseek-v4-pro"
 
             def capabilities(self):
                 calls.append(name)
@@ -673,6 +674,7 @@ base_url = "https://api.deepseek.com"
         "codex": ["custom-codex"],
         "cursor": ["custom-cursor"],
         "antigravity": ["custom-agy"],
+        "deepseek": ["custom-opencode"],
     }
     for name in calls:
         assert name in result.output.lower()

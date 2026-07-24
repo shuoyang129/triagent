@@ -37,6 +37,7 @@ check_command git git
 check_command codex "$HOME/.local/bin/codex"
 check_command cursor-agent "$HOME/.local/bin/cursor-agent"
 check_command antigravity "$HOME/.local/bin/agy"
+check_command opencode "$HOME/.opencode/bin/opencode"
 check_command conda "$HOME/miniforge3/bin/conda"
 check_command nvidia-smi nvidia-smi
 check_command docker docker

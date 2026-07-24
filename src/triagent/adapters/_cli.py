@@ -283,6 +283,92 @@ def invoke_codex_jsonl(
     actual=payload.get("actual_usd") if isinstance(payload.get("actual_usd"),(int,float)) else None
     return AgentResult(status=AgentStatus.SUCCEEDED, data=data,actual_usd=actual)
 
+
+def invoke_opencode_jsonl(
+    runner: ProcessRunner,
+    argv: Sequence[str],
+    cwd: Path,
+    timeout: float,
+    env: Mapping[str, str] | None = None,
+    secret_values: Sequence[str] = (),
+    role: AgentRole = AgentRole.IMPLEMENTER,
+) -> AgentResult:
+    try:
+        process = runner.run(argv, cwd, timeout, env or {})
+    except (FileNotFoundError, OSError):
+        return AgentResult(status=AgentStatus.UNAVAILABLE, summary="OpenCode executable is unavailable")
+    if process.timed_out:
+        return AgentResult(status=AgentStatus.TIMED_OUT, summary="OpenCode execution timed out")
+    if process.returncode != 0:
+        diagnostic = f"{process.stdout}\n{process.stderr}".lower()
+        auth_code = re.search(r"(?<!\d)(?:401|403)(?!\d)", diagnostic) is not None
+        if auth_code or any(marker in diagnostic for marker in _AUTH_FAILURES):
+            return AgentResult(
+                status=AgentStatus.UNAVAILABLE,
+                summary="OpenCode authentication or configuration is unavailable",
+            )
+        return AgentResult(status=AgentStatus.FAILED, summary="OpenCode execution failed")
+    messages: list[str] = []
+    try:
+        for line in process.stdout.splitlines():
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            if not isinstance(event, dict):
+                raise ValueError
+            if event.get("type") == "error":
+                return AgentResult(status=AgentStatus.FAILED, summary="OpenCode execution failed")
+            part = event.get("part")
+            if (
+                event.get("type") == "text"
+                and isinstance(part, dict)
+                and part.get("type") == "text"
+                and isinstance(part.get("text"), str)
+            ):
+                messages.append(part["text"])
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return AgentResult(
+            status=AgentStatus.INVALID_OUTPUT,
+            summary="OpenCode returned malformed structured output",
+        )
+    if not messages:
+        return AgentResult(
+            status=AgentStatus.INVALID_OUTPUT,
+            summary="OpenCode returned no final agent message",
+        )
+    message = sanitize(messages[-1], secret_values)
+    assert isinstance(message, str)
+    payload, diagnostic = _decode_json_object(message)
+    if diagnostic is not None or payload is None:
+        return AgentResult(
+            status=AgentStatus.INVALID_OUTPUT,
+            summary="OpenCode returned non-JSON canonical output",
+        )
+    payload = sanitize(payload, secret_values)
+    assert isinstance(payload, dict)
+    try:
+        data = _canonical(role, payload)
+    except ValueError:
+        return AgentResult(
+            status=AgentStatus.INVALID_OUTPUT,
+            summary="OpenCode returned invalid canonical output",
+            data={"diagnostic_code": "canonical-output-invalid"},
+        )
+    actual = payload.get("actual_usd")
+    if (
+        not isinstance(actual, (int, float))
+        or isinstance(actual, bool)
+        or not math.isfinite(actual)
+    ):
+        actual = None
+    return AgentResult(
+        status=AgentStatus.SUCCEEDED,
+        data=data,
+        stdout="",
+        stderr="",
+        actual_usd=actual,
+    )
+
 def _canonical(role: AgentRole, payload: dict) -> dict:
     model=ReviewPayload if role is AgentRole.REVIEWER else ImplementerPayload if role is AgentRole.IMPLEMENTER else CanonicalPayload
     try: parsed=model.model_validate(payload)

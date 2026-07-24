@@ -122,9 +122,9 @@ estimated_usd=0.5
 command=["agy"]
 estimated_usd=0.5
 [agents.deepseek]
+command=["opencode"]
 enabled=true
-model="deepseek-v4-flash"
-base_url="https://api.deepseek.com"
+model="deepseek/deepseek-v4-pro"
 estimated_usd=0.5
 probe_estimated_usd=0.25
 [budget]
@@ -167,9 +167,9 @@ estimated_usd=0.5
 command=["agy"]
 estimated_usd=0.5
 [agents.deepseek]
+command=["opencode"]
 enabled=true
-model="deepseek-v4-flash"
-base_url="https://api.deepseek.com"
+model="deepseek/deepseek-v4-pro"
 estimated_usd=0.5
 probe_estimated_usd=0.25
 [budget]

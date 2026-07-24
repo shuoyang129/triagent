@@ -20,8 +20,8 @@ estimated_usd = 1.0
 
 [agents.deepseek]
 enabled = false
-model = "deepseek-v4-flash"
-base_url = "https://api.deepseek.com"
+model = "deepseek/deepseek-v4-pro"
+command = ["C:\\Users\\operator\\.opencode\\bin\\opencode.exe"]
 estimated_usd = 1.0
 probe_estimated_usd = 0.25
 

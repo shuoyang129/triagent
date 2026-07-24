@@ -81,13 +81,10 @@ def _fallback_profile(config:dict)->tuple[str,bool]:
 
 def _deepseek_options(config: dict) -> dict[str, str]:
     section = config.get("agents", {}).get("deepseek", {})
-    model = section.get("model", "deepseek-v4-flash")
-    base_url = section.get("base_url", "https://api.deepseek.com")
+    model = section.get("model", "deepseek/deepseek-v4-pro")
     if not isinstance(model, str) or not model:
         raise ValueError("invalid DeepSeek model")
-    if not isinstance(base_url, str) or not base_url:
-        raise ValueError("invalid DeepSeek base URL")
-    return {"model": model, "base_url": base_url}
+    return {"model": model, "command": _profile_command(config, "deepseek")}
 
 
 def _profile_digest(config: dict) -> str:

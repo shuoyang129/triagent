@@ -97,7 +97,7 @@ Provider calls default to a 900-second timeout; operators may set
 `TRIAGENT_AGENT_TIMEOUT_SECONDS` from 60 through 3600 seconds. Cursor's
 filesystem capability probe remains independently bounded at 30 seconds.
 
-The optional DeepSeek fallback is a native OpenAI-compatible Python adapter, not a Cursor custom model or OpenCode process. It reads `DEEPSEEK_API_KEY` only from the environment, connects only to the official `https://api.deepseek.com` endpoint, supplies a bounded snapshot of tracked UTF-8 files, and accepts only validated relative `write`/`delete` operations. It has no shell tool. The checked-in profiles keep it disabled; enabling it requires explicit live and billing confirmation plus positive `estimated_usd` and `probe_estimated_usd` values. Readiness failures are reduced to allowlisted diagnostic codes such as authentication, balance, model-list, rate-limit, timeout, connection, request, service, or invalid-smoke categories; provider response text is never persisted.
+The optional DeepSeek fallback runs through OpenCode and defaults to `deepseek/deepseek-v4-pro`; it is not a Cursor custom model. It reads `DEEPSEEK_API_KEY` only from the environment and injects it through an OpenCode `{env:DEEPSEEK_API_KEY}` provider reference. The TriAgent-specific OpenCode agent denies shell, network, subagents, skills, external directories, `.env`, and `.git`, while allowing repository-local read, search, and edit tools. `--pure` disables external plugins and the final response is parsed from OpenCode's JSON event stream. The checked-in profiles keep DeepSeek disabled; enabling it requires explicit live and billing confirmation plus positive `estimated_usd` and `probe_estimated_usd` values. Readiness failures are reduced to allowlisted diagnostic codes; provider response text is never persisted.
 
 [`profiles/dgx.spark.synthetic-force.toml`](profiles/dgx.spark.synthetic-force.toml)
 is a deliberately narrow exception. It passes Cursor `--force`, which
@@ -113,7 +113,7 @@ production repository.
 
 ## Verification status
 
-On 2026-07-22 the DGX route completed a real paid Cursor, Codex, and Antigravity synthetic test. On 2026-07-23 the native DeepSeek implementation, Codex verification, and Antigravity review route also passed and reached the approval gate. The complete offline suite at the latter revision reported 287 passed and 9 skipped.
+On 2026-07-22 the DGX route completed a real paid Cursor, Codex, and Antigravity synthetic test. On 2026-07-23 the earlier native DeepSeek implementation, Codex verification, and Antigravity review route also passed and reached the approval gate. On 2026-07-25 the OpenCode-backed `deepseek/deepseek-v4-pro` implementation, Codex verification, and Antigravity review route completed a real paid synthetic test and reached `APPROVAL`; Antigravity succeeded on its single permitted retry.
 
 Real calls consume provider quota or incur charges. TriAgent's estimated-cost
 ledger is conservative accounting, not a provider invoice.

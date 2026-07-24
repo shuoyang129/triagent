@@ -51,7 +51,7 @@ $CONDA run -n triagent triagent report TASK_ID --data-root "$DATA_ROOT"
 Use only a task ID printed by TriAgent. The profile selects the repository-owned
 Cursor and Antigravity adapters, which delegate to the fixed vendor binaries;
 do not substitute `agent`.
-The native DeepSeek Python fallback remains disabled by default. It requires `DEEPSEEK_API_KEY`, uses only the official API endpoint, has no shell tool, and accepts only controller-validated text file changes. OpenCode is not used.
+The OpenCode-backed DeepSeek fallback remains disabled by default. It requires `DEEPSEEK_API_KEY`, defaults to `deepseek/deepseek-v4-pro`, and uses a restricted TriAgent OpenCode agent with shell, network, subagents, skills, external directories, `.env`, and `.git` denied. Enable it only with explicit live and billing confirmation.
 
 `profiles/dgx.spark.synthetic-force.toml` is an explicit exception for
 strictly isolated synthetic repositories. It passes `--force`, which overrides

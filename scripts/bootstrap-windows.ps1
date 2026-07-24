@@ -40,7 +40,8 @@ $cursorAuth = Invoke-Probe { wsl -d Ubuntu-24.04 -- bash -lc '~/.local/bin/curso
 $agyPath = Join-Path $env:LOCALAPPDATA "agy/bin/agy.exe"
 $antigravity = Invoke-Probe { & $agyPath --version }
 $antigravityConfig = Test-Path (Join-Path $env:USERPROFILE ".gemini/antigravity-cli/settings.json")
-$deepseekSdk = Invoke-Probe { & $pythonPath -c "import openai; print(openai.__version__)" }
+$openCodePath = Join-Path $env:USERPROFILE ".opencode/bin/opencode.exe"
+$openCode = Invoke-Probe { & $openCodePath --version }
 $deepseekConfigured = -not [string]::IsNullOrWhiteSpace($env:DEEPSEEK_API_KEY)
 
 $payload = [ordered]@{
@@ -52,7 +53,7 @@ $payload = [ordered]@{
         codex = New-Capability $codex.ok $codex.text $codexAuth.ok $true
         cursor = New-Capability $cursor.ok $cursor.text ($cursorAuth.ok -and $cursorAuth.text -match "Logged in") $true
         antigravity = New-Capability $antigravity.ok $antigravity.text ($antigravityConfig -and $antigravity.ok) $true
-        deepseek = New-Capability $deepseekSdk.ok $(if ($deepseekSdk.ok) { $deepseekSdk.text } else { $null }) $deepseekConfigured $true
+        deepseek = New-Capability $openCode.ok $(if ($openCode.ok) { $openCode.text } else { $null }) $deepseekConfigured $true
     }
 }
 

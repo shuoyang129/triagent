@@ -33,10 +33,10 @@ def test_interrupted_paid_call_charges_reserved_estimate(tmp_path):
         row=c.execute("select estimated_usd,actual_usd,charged_usd,status from agent_calls where id=?",(call,)).fetchone()
     assert tuple(row)==(1.25,None,1.25,"interrupted")
 
-def test_deepseek_capability_without_live_confirmation_calls_no_runner(tmp_path):
-    runner=Runner(AssertionError("runner must not execute"))
+def test_deepseek_capability_without_live_confirmation_only_probes_version(tmp_path):
+    runner=Runner(ProcessResult(0,"1.18.4","",False))
     caps=DeepSeekAdapter(runner=runner,enabled=True,billing_confirmed=True,live_confirmed=False).capabilities()
-    assert not caps.available and runner.calls == []
+    assert not caps.available and runner.calls == [["opencode","--version"]]
 
 @pytest.mark.parametrize("adapter_cls,output",[
     (CodexAdapter,json.dumps({"type":"item.completed","item":{"type":"agent_message","text":json.dumps({"status":"passed"})}})),

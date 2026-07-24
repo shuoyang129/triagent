@@ -1,0 +1,169 @@
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from triagent.adapters.base import AgentRequest, AgentRole, AgentStatus
+from triagent.adapters.deepseek import DeepSeekAdapter
+from triagent.adapters.process import ProcessResult
+
+
+MODEL = "deepseek/deepseek-v4-pro"
+
+
+def completed(stdout: str = "", stderr: str = "", returncode: int = 0) -> ProcessResult:
+    return ProcessResult(returncode, stdout, stderr, False)
+
+
+class OpenCodeRunner:
+    def __init__(self, *, final: dict | None = None, smoke_error: ProcessResult | None = None) -> None:
+        self.final = final or {
+            "status": "passed",
+            "evidence": ["updated base"],
+            "artifacts": [],
+            "changed_paths": ["base.txt"],
+        }
+        self.smoke_error = smoke_error
+        self.calls: list[tuple[list[str], Path, float, dict[str, str], str | None]] = []
+
+    def run(self, argv, cwd, timeout, env, stdin=None):
+        self.calls.append((list(argv), Path(cwd), timeout, dict(env), stdin))
+        if argv[-1] == "--version":
+            return completed("1.18.4\n")
+        if "models" in argv:
+            return completed(f"{MODEL}\ndeepseek/deepseek-v4-flash\n")
+        if "triagent-opencode-probe-" in argv[-1]:
+            if self.smoke_error is not None:
+                return self.smoke_error
+            path = json.loads(re.search(r"PATH_JSON=(\".*?\") NONCE=", argv[-1]).group(1))
+            nonce = argv[-1].split(" NONCE=", 1)[1]
+            Path(path).write_text(nonce, encoding="utf-8")
+            return completed('{"type":"text","part":{"type":"text","text":"ok"}}\n')
+        event = {
+            "type": "text",
+            "part": {"type": "text", "text": json.dumps(self.final)},
+        }
+        return completed(json.dumps(event) + "\n")
+
+
+def request(tmp_path: Path) -> AgentRequest:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "base.txt").write_text("base\n", encoding="utf-8")
+    task = tmp_path / "task.json"
+    task.write_text('{"goal":"change base"}', encoding="utf-8")
+    return AgentRequest(
+        role=AgentRole.IMPLEMENTER,
+        agent_identity="deepseek",
+        task_file=task,
+        workdir=tmp_path,
+        output_schema="implementation-result-v1",
+        timeout_seconds=60,
+    )
+
+
+def ready_adapter(monkeypatch: pytest.MonkeyPatch, runner: OpenCodeRunner, probe_dir: Path) -> DeepSeekAdapter:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-value")
+    adapter = DeepSeekAdapter(
+        enabled=True,
+        billing_confirmed=True,
+        live_confirmed=True,
+        command=["custom-opencode"],
+        runner=runner,
+        probe_dir=probe_dir,
+    )
+    assert adapter.capabilities().available is True
+    return adapter
+
+
+def test_opencode_deepseek_uses_pro_model_and_restricted_inline_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = OpenCodeRunner()
+    ready_adapter(monkeypatch, runner, tmp_path / "probe")
+
+    run_call = runner.calls[-1]
+    assert run_call[0][:2] == ["custom-opencode", "run"]
+    model_index = run_call[0].index("--model")
+    assert ["--model", MODEL] == run_call[0][model_index : model_index + 2]
+    config = json.loads(run_call[3]["OPENCODE_CONFIG_CONTENT"])
+    assert config["enabled_providers"] == ["deepseek"]
+    assert config["provider"]["deepseek"]["options"]["apiKey"] == "{env:DEEPSEEK_API_KEY}"
+    permissions = config["agent"]["triagent"]["permission"]
+    assert permissions["bash"] == "deny"
+    assert permissions["webfetch"] == "deny"
+    assert permissions["task"] == "deny"
+    assert permissions["external_directory"] == "deny"
+    assert permissions["skill"] == "deny"
+    assert permissions["read"][".env"] == "deny"
+    assert permissions["edit"][".git/*"] == "deny"
+
+
+def test_opencode_deepseek_parses_json_event_and_uses_private_attachment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = OpenCodeRunner()
+    adapter = ready_adapter(monkeypatch, runner, tmp_path / "probe")
+
+    result = adapter.run(request(tmp_path))
+
+    assert result.status is AgentStatus.SUCCEEDED
+    assert result.data["changed_paths"] == ["base.txt"]
+    argv = runner.calls[-1][0]
+    assert "--pure" in argv and "--format" in argv and "json" in argv
+    assert argv[-1].startswith("--file=")
+    prompt_path = Path(
+        next(part.split("=", 1)[1] for part in argv if part.startswith("--file="))
+    )
+    assert not prompt_path.exists()
+    assert prompt_path.parent == tmp_path
+    assert "secret-value" not in " ".join(argv)
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        ("HTTP 401 unauthorized", "deepseek-authentication-failed"),
+        ("HTTP 402 insufficient_balance", "deepseek-insufficient-balance"),
+        ("HTTP 403 forbidden", "deepseek-permission-denied"),
+        ("HTTP 429 rate limit", "deepseek-rate-limited"),
+        ("HTTP 503 unavailable", "deepseek-service-unavailable"),
+    ],
+)
+def test_opencode_readiness_maps_safe_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stderr: str,
+    expected: str,
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-value")
+    runner = OpenCodeRunner(smoke_error=completed(stderr=stderr, returncode=1))
+    caps = DeepSeekAdapter(
+        enabled=True,
+        billing_confirmed=True,
+        live_confirmed=True,
+        runner=runner,
+        probe_dir=tmp_path,
+    ).capabilities()
+    assert caps.available is False
+    assert caps.diagnostic_code == expected
+    assert stderr not in caps.model_dump_json()
+
+
+def test_disabled_deepseek_only_probes_local_opencode() -> None:
+    runner = OpenCodeRunner()
+    caps = DeepSeekAdapter(runner=runner).capabilities()
+    assert caps.available is False
+    assert caps.installed is True
+    assert caps.diagnostic_code == "deepseek-disabled"
+    assert len(runner.calls) == 1
+
+
+def test_native_deepseek_arguments_are_rejected() -> None:
+    with pytest.raises(TypeError, match="legacy native"):
+        DeepSeekAdapter(base_url="https://api.deepseek.com")
+    with pytest.raises(TypeError, match="legacy native"):
+        DeepSeekAdapter(client_factory=object())
