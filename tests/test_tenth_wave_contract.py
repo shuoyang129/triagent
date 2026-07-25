@@ -118,6 +118,16 @@ def test_suspicious_secret_changes_rejected_before_object_write(tmp_path,name,da
     assert subprocess.run(["git","cat-file","-e",oid],cwd=work,capture_output=True).returncode!=0
 
 
+def test_noncredential_identifier_ending_in_token_is_not_rejected(tmp_path):
+    store, task, work = setup(tmp_path)
+    data = b'{"actual_error_token":"sensor_keyframe_sequence_transaction_mismatch"}\n'
+    (work / "review.json").write_bytes(data)
+
+    candidate = store.materialize_reviewed_commit(task.id, ["review.json"])
+
+    assert subprocess.run(["git", "show", f"{candidate}:review.json"], cwd=work, check=True, capture_output=True).stdout == data
+
+
 def test_ignored_cache_and_node_modules_never_enter_candidate(tmp_path):
     store,task,work=setup(tmp_path,{".gitignore":b"*.cache\nnode_modules/\n"})
     (work/"allowed.txt").write_text("ok",encoding="utf-8");(work/"junk.cache").write_text("ignored",encoding="utf-8")

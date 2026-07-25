@@ -27,7 +27,7 @@ class BudgetExceeded(RuntimeError): pass
 class LeaseConflict(RuntimeError): pass
 
 _CREDENTIAL_PATH=re.compile(r"(?i)(?:^|/)(?:\.env(?:\..*)?|\.npmrc|\.pypirc|\.yarnrc(?:\.yml)?|id_[^/]+|auth[^/]*|credentials?[^/]*|secrets?[^/]*|\.docker/config\.json|\.config/containers/auth\.json|\.aws/credentials|\.config/gcloud/.*|\.azure/.*|\.cargo/credentials(?:\.toml)?)$|(?:^|[._-])(?:credentials?|secrets?|passwords?|tokens?|api[_-]?keys?|auth)(?:[._-]|$)|\.(?:pem|key)$")
-_CREDENTIAL_CONTENT=re.compile(r"(?is)(?:api[_-]?key|access[_-]?key|client[_-]?secret|auths?|auth[_-]?token|basic[_-]?auth|registry[_-]?auth|token|password|secret|authorization|credential|_authToken)\s*['\"]?\s*[:=]\s*['\"]?(?:basic\s+|bearer\s+)?[^\s,'\"}]{12,}|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\b(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]{12,}|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+_CREDENTIAL_CONTENT=re.compile(r"(?is)(?<![A-Za-z0-9_])(?:api[_-]?key|access[_-]?key|client[_-]?secret|auths?|auth[_-]?token|basic[_-]?auth|registry[_-]?auth|token|password|secret|authorization|credential|_authToken)\s*['\"]?\s*[:=]\s*['\"]?(?:basic\s+|bearer\s+)?[^\s,'\"}]{12,}|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\b(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]{12,}|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
 _STRUCTURED_AUTH_FIELD=re.compile(r"(?im)(?:^|[,{\s])['\"]?(?:auths?|basic[_-]?auth|registry[_-]?auth)['\"]?\s*[:=]")
 _SAFE_RASTER_SUFFIXES={".png"}
 _TEXT_LIMIT=1024*1024
