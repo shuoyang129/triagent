@@ -21,6 +21,7 @@ command = ["/home/ys/works/robots/triagent/scripts/codex-verify-adapter.zsh"]
 estimated_usd = 1.0
 
 [agents.cursor]
+enabled = false
 command = ["/home/ys/works/robots/triagent/scripts/cursor-agent-adapter.zsh", "--auto-review", "--sandbox", "enabled", "--model", "auto"]
 estimated_usd = 1.0
 
@@ -29,7 +30,7 @@ command = ["/home/ys/works/robots/triagent/scripts/agy-review-adapter.zsh"]
 estimated_usd = 1.0
 
 [agents.deepseek]
-enabled = false
+enabled = true
 model = "deepseek/deepseek-v4-pro"
 command = ["/home/ys/.opencode/bin/opencode"]
 estimated_usd = 1.0

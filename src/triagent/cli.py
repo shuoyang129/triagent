@@ -79,6 +79,13 @@ def _fallback_profile(config:dict)->tuple[str,bool]:
     return "deepseek",agents.get("deepseek",{}).get("enabled") is True
 
 
+def _agent_enabled(config: dict, name: str, *, default: bool) -> bool:
+    value = config.get("agents", {}).get(name, {}).get("enabled", default)
+    if not isinstance(value, bool):
+        raise ValueError(f"invalid {name} enabled flag")
+    return value
+
+
 def _deepseek_options(config: dict) -> dict[str, str]:
     section = config.get("agents", {}).get("deepseek", {})
     model = section.get("model", "deepseek/deepseek-v4-pro")
@@ -152,6 +159,7 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
         if profile != "fake":
             config=tomllib.loads(Path(profile).read_text(encoding="utf-8"))
             values=config.get("budget",{})
+            cursor_enabled=_agent_enabled(config, "cursor", default=True)
             budget=Budget(max_agent_calls=int(values.get("max_agent_calls",20)),max_minutes=int(values.get("max_minutes",60)),max_usd=float(values.get("max_usd",0)))
             for agent in ("cursor","codex","antigravity"):_profile_command(config,agent)
             fallback_name,fallback_enabled=_fallback_profile(config)
@@ -182,9 +190,9 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
             cursor = CursorAdapter(command=_profile_command(config, "cursor"), estimated_usd=_priced(config,"cursor"))
             codex = CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config,"codex"))
             antigravity = AntigravityAdapter(command=_profile_command(config, "antigravity"), estimated_usd=_priced(config,"antigravity"))
-            cursor_caps=cursor.capabilities()  # preferred free/version/auth probe first; no model smoke
+            cursor_caps=cursor.capabilities() if cursor_enabled else False
             capabilities={"cursor":cursor_caps,"deepseek":False}
-            if not cursor_caps.available and fallback_enabled:
+            if not bool(getattr(cursor_caps, "available", False)) and fallback_enabled:
                 deepseek=DeepSeekAdapter(enabled=True,billing_confirmed=billing_confirmed,live_confirmed=live_confirmed,estimated_usd=fallback_estimate,**_deepseek_options(config))
                 deepseek_caps=store.execute_paid_operation(task.id,probe_cost,deepseek.capabilities)
                 capabilities["deepseek"]=deepseek_caps
@@ -338,14 +346,19 @@ def doctor(profile: Annotated[str, typer.Option()] = "fake") -> None:
         raise typer.BadParameter("Cannot read selected profile") from error
 
     deepseek_enabled = bool(config.get("agents", {}).get("deepseek", {}).get("enabled", False))
+    cursor_enabled = _agent_enabled(config, "cursor", default=True)
     probes = (
         ("codex", CodexAdapter(command=_profile_command(config, "codex"))),
-        ("cursor", CursorAdapter(command=_profile_command(config, "cursor"))),
+        ("cursor", CursorAdapter(command=_profile_command(config, "cursor"))
+         if cursor_enabled else None),
         ("antigravity", AntigravityAdapter(command=_profile_command(config, "antigravity"))),
         ("deepseek", DeepSeekAdapter(enabled=deepseek_enabled, billing_confirmed=False, **_deepseek_options(config))),
     )
     typer.echo(f"Profile: {profile_path}")
     for name, adapter in probes:
+        if adapter is None:
+            typer.echo(f"{name}: disabled")
+            continue
         capability = adapter.capabilities()
         diagnostic = getattr(capability, "diagnostic_code", None)
         typer.echo(

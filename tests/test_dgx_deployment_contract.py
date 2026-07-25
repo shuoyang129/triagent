@@ -35,6 +35,7 @@ def test_concrete_dgx_profile_uses_verified_paths_and_budgets() -> None:
     assert config["agents"]["codex"]["command"] == [
         "/home/ys/works/robots/triagent/scripts/codex-verify-adapter.zsh"
     ]
+    assert config["agents"]["cursor"]["enabled"] is False
     assert config["agents"]["cursor"]["command"] == [
         "/home/ys/works/robots/triagent/scripts/cursor-agent-adapter.zsh",
         "--auto-review",
@@ -47,7 +48,7 @@ def test_concrete_dgx_profile_uses_verified_paths_and_budgets() -> None:
         "/home/ys/works/robots/triagent/scripts/agy-review-adapter.zsh"
     ]
     assert config["agents"]["deepseek"] == {
-        "enabled": False,
+        "enabled": True,
         "model": "deepseek/deepseek-v4-pro",
         "command": ["/home/ys/.opencode/bin/opencode"],
         "estimated_usd": 1.0,
@@ -68,6 +69,8 @@ def test_synthetic_force_profile_is_strictly_isolated() -> None:
     config = tomllib.loads(SYNTHETIC_PROFILE.read_text(encoding="utf-8"))
     assert config["paths"]["runs"] == "/home/ys/works/robots/triagent-synthetic-runs"
     assert config["paths"]["workspace"] == "/home/ys/works/robots/synthetic-projects"
+    assert config["agents"]["cursor"]["enabled"] is False
+    assert config["agents"]["deepseek"]["enabled"] is True
     command = config["agents"]["cursor"]["command"]
     assert command[:5] == [
         "/home/ys/works/robots/triagent/scripts/cursor-synthetic-force-adapter.zsh",

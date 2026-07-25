@@ -129,6 +129,17 @@ def test_resume_requires_explicit_profile_and_rejects_live_to_fake_downgrade(
     assert store.runtime(task.id).repair_attempts == 0
 
 
+def test_agent_enabled_defaults_cursor_on_and_accepts_explicit_disable() -> None:
+    assert cli_module._agent_enabled({}, "cursor", default=True) is True
+    assert cli_module._agent_enabled(
+        {"agents": {"cursor": {"enabled": False}}}, "cursor", default=True
+    ) is False
+    with pytest.raises(ValueError, match="invalid cursor enabled flag"):
+        cli_module._agent_enabled(
+            {"agents": {"cursor": {"enabled": "false"}}}, "cursor", default=True
+        )
+
+
 def _live_profile(path: Path, *, cursor_command: str = "cursor", deepseek: bool = False) -> dict:
     path.write_text(f'''\
 [agents.cursor]
