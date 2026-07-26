@@ -21,7 +21,20 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="/usr/bin/python3"
 
 set +e
-if [[ "${contract}" == *"tests.test_g1_isaac_support_safety"* \
+if [[ "${contract}" == *"tests.test_g1_isaac_premotion_safety"* \
+   && "${contract}" == *"services/g1_telemetry/__init__.py services/g1_telemetry/premotion.py scripts/evaluate_g1_isaac_premotion.py tests/test_g1_isaac_premotion_safety.py"* ]]; then
+  test_scope="m18-exact-38"
+  "${python_bin}" -m unittest -v \
+    tests.test_g1_isaac_premotion_safety > "${test_log}" 2>&1
+  test_status=$?
+  "${python_bin}" -m py_compile \
+    services/g1_telemetry/__init__.py \
+    services/g1_telemetry/premotion.py \
+    scripts/evaluate_g1_isaac_premotion.py \
+    tests/test_g1_isaac_premotion_safety.py > "${compile_log}" 2>&1
+  compile_status=$?
+
+elif [[ "${contract}" == *"tests.test_g1_isaac_support_safety"* \
    && "${contract}" == *"services/g1_telemetry/support.py scripts/capture_isaac_g1_support_artifact.py scripts/evaluate_g1_isaac_support.py tests/test_g1_isaac_support_safety.py"* ]]; then
   test_scope="m17-focused"
   "${python_bin}" -m unittest -v \
