@@ -336,10 +336,15 @@ def invoke_opencode_jsonl(
             status=AgentStatus.INVALID_OUTPUT,
             summary="OpenCode returned no final agent message",
         )
-    message = sanitize(messages[-1], secret_values)
-    assert isinstance(message, str)
-    payload, diagnostic = _decode_json_object(message)
-    if diagnostic is not None or payload is None:
+    payload = None
+    for start in range(len(messages) - 1, -1, -1):
+        candidate = sanitize("".join(messages[start:]), secret_values)
+        assert isinstance(candidate, str)
+        decoded, diagnostic = _decode_json_object(candidate)
+        if diagnostic is None and decoded is not None:
+            payload = decoded
+            break
+    if payload is None:
         return AgentResult(
             status=AgentStatus.INVALID_OUTPUT,
             summary="OpenCode returned non-JSON canonical output",

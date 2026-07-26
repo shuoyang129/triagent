@@ -20,13 +20,20 @@ def completed(stdout: str = "", stderr: str = "", returncode: int = 0) -> Proces
 
 
 class OpenCodeRunner:
-    def __init__(self, *, final: dict | None = None, smoke_error: ProcessResult | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        final: dict | None = None,
+        final_fragments: list[str] | None = None,
+        smoke_error: ProcessResult | None = None,
+    ) -> None:
         self.final = final or {
             "status": "passed",
             "evidence": ["updated base"],
             "artifacts": [],
             "changed_paths": ["base.txt"],
         }
+        self.final_fragments = final_fragments
         self.smoke_error = smoke_error
         self.calls: list[tuple[list[str], Path, float, dict[str, str], str | None]] = []
 
@@ -43,11 +50,15 @@ class OpenCodeRunner:
             nonce = argv[-1].split(" NONCE=", 1)[1]
             Path(path).write_text(nonce, encoding="utf-8")
             return completed('{"type":"text","part":{"type":"text","text":"ok"}}\n')
-        event = {
-            "type": "text",
-            "part": {"type": "text", "text": json.dumps(self.final)},
-        }
-        return completed(json.dumps(event) + "\n")
+        fragments = self.final_fragments or [json.dumps(self.final)]
+        events = [
+            {
+                "type": "text",
+                "part": {"type": "text", "text": fragment},
+            }
+            for fragment in fragments
+        ]
+        return completed("".join(json.dumps(event) + "\n" for event in events))
 
 
 def request(tmp_path: Path) -> AgentRequest:
@@ -121,6 +132,38 @@ def test_opencode_deepseek_parses_json_event_and_uses_private_attachment(
     assert not prompt_path.exists()
     assert prompt_path.parent == tmp_path
     assert "secret-value" not in " ".join(argv)
+
+
+def test_opencode_deepseek_parses_fragmented_final_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    final = {
+        "status": "passed",
+        "evidence": ["updated base"],
+        "artifacts": [],
+        "changed_paths": ["base.txt"],
+    }
+    encoded = json.dumps(final)
+    runner = OpenCodeRunner(
+        final_fragments=["intermediate text", encoded[:17], encoded[17:41], encoded[41:]]
+    )
+    adapter = ready_adapter(monkeypatch, runner, tmp_path / "probe")
+
+    result = adapter.run(request(tmp_path))
+
+    assert result.status is AgentStatus.SUCCEEDED
+    assert result.data["changed_paths"] == ["base.txt"]
+
+
+def test_opencode_deepseek_rejects_fragmented_non_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = OpenCodeRunner(final_fragments=["not ", "canonical ", "json"])
+    adapter = ready_adapter(monkeypatch, runner, tmp_path / "probe")
+
+    result = adapter.run(request(tmp_path))
+
+    assert result.status is AgentStatus.INVALID_OUTPUT
 
 
 @pytest.mark.parametrize(
