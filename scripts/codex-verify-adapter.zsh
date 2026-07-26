@@ -21,7 +21,19 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="/usr/bin/python3"
 
 set +e
-if [[ "${contract}" == *"tests.test_g1_isaac_telemetry_safety tests.test_g1_offline_safety tests.test_g1_telemetry_contract"* \
+if [[ "${contract}" == *"tests.test_g1_isaac_posture_safety"* \
+   && "${contract}" == *"services/g1_telemetry/__init__.py services/g1_telemetry/posture.py scripts/evaluate_g1_isaac_posture.py tests/test_g1_isaac_posture_safety.py"* ]]; then
+  test_scope="m16-exact-36"
+  "${python_bin}" -m unittest -v \
+    tests.test_g1_isaac_posture_safety > "${test_log}" 2>&1
+  test_status=$?
+  "${python_bin}" -m py_compile \
+    services/g1_telemetry/__init__.py \
+    services/g1_telemetry/posture.py \
+    scripts/evaluate_g1_isaac_posture.py \
+    tests/test_g1_isaac_posture_safety.py > "${compile_log}" 2>&1
+  compile_status=$?
+elif [[ "${contract}" == *"tests.test_g1_isaac_telemetry_safety tests.test_g1_offline_safety tests.test_g1_telemetry_contract"* \
    && "${contract}" == *"services/g1_telemetry/isaac_rehearsal.py scripts/capture_isaac_g1_telemetry_artifact.py scripts/run_g1_isaac_telemetry_safety_rehearsal.py"* ]]; then
   test_scope="m15-exact-95"
   "${python_bin}" -m unittest -v \

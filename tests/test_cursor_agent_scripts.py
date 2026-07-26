@@ -137,6 +137,16 @@ print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":
     assert json.loads(event["item"]["text"])["status"] == "passed"
 
 
+def test_codex_adapter_has_exact_m16_verification_scope() -> None:
+    text = CODEX_ADAPTER.read_text(encoding="utf-8")
+    assert "m16-exact-36" in text
+    assert "tests.test_g1_isaac_posture_safety" in text
+    assert "services/g1_telemetry/__init__.py" in text
+    assert "services/g1_telemetry/posture.py" in text
+    assert "scripts/evaluate_g1_isaac_posture.py" in text
+    assert "tests/test_g1_isaac_posture_safety.py" in text
+
+
 def test_agy_adapter_propagates_safe_auth_marker(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
