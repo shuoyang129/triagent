@@ -21,7 +21,19 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="/usr/bin/python3"
 
 set +e
-if [[ "${contract}" == *"tests.test_g1_isaac_premotion_safety"* \
+if [[ "${contract}" == *"tests.test_g1_isaac_premotion_denial"* \
+   && "${contract}" == *"services/full_e2e/premotion_denial.py scripts/evaluate_g1_isaac_premotion_denial.py tests/test_g1_isaac_premotion_denial.py"* ]]; then
+  test_scope="m19-focused"
+  "${python_bin}" -m unittest -v \
+    tests.test_g1_isaac_premotion_denial > "${test_log}" 2>&1
+  test_status=$?
+  "${python_bin}" -m py_compile \
+    services/full_e2e/premotion_denial.py \
+    scripts/evaluate_g1_isaac_premotion_denial.py \
+    tests/test_g1_isaac_premotion_denial.py > "${compile_log}" 2>&1
+  compile_status=$?
+
+elif [[ "${contract}" == *"tests.test_g1_isaac_premotion_safety"* \
    && "${contract}" == *"services/g1_telemetry/__init__.py services/g1_telemetry/premotion.py scripts/evaluate_g1_isaac_premotion.py tests/test_g1_isaac_premotion_safety.py"* ]]; then
   test_scope="m18-exact-38"
   "${python_bin}" -m unittest -v \
