@@ -23,11 +23,12 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 set +e
 if [[ "${contract}" == *"tests.test_g1_isaac_premotion_denial"* \
    && "${contract}" == *"services/full_e2e/premotion_denial.py scripts/evaluate_g1_isaac_premotion_denial.py tests/test_g1_isaac_premotion_denial.py"* ]]; then
-  test_scope="m19-focused"
-  "${python_bin}" -m unittest -v \
+  test_scope="m19-exact-46"
+  m19_python_bin="/usr/bin/python3"
+  "${m19_python_bin}" -m unittest -v \
     tests.test_g1_isaac_premotion_denial > "${test_log}" 2>&1
   test_status=$?
-  "${python_bin}" -m py_compile \
+  "${m19_python_bin}" -m py_compile \
     services/full_e2e/premotion_denial.py \
     scripts/evaluate_g1_isaac_premotion_denial.py \
     tests/test_g1_isaac_premotion_denial.py > "${compile_log}" 2>&1
