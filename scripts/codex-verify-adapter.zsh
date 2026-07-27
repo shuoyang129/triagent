@@ -21,7 +21,20 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="/usr/bin/python3"
 
 set +e
-if [[ "${contract}" == *"tests.test_g1_isaac_denial_retry"* \
+if [[ "${contract}" == *"tests.test_g1_isaac_retry_safety_admission"* \
+   && "${contract}" == *"services/full_e2e/retry_safety_admission.py scripts/evaluate_g1_isaac_retry_safety_admission.py tests/test_g1_isaac_retry_safety_admission.py"* ]]; then
+  test_scope="m22-focused"
+  m22_python_bin="/usr/bin/python3"
+  "${m22_python_bin}" -m unittest -v \
+    tests.test_g1_isaac_retry_safety_admission > "${test_log}" 2>&1
+  test_status=$?
+  "${m22_python_bin}" -m py_compile \
+    services/full_e2e/retry_safety_admission.py \
+    scripts/evaluate_g1_isaac_retry_safety_admission.py \
+    tests/test_g1_isaac_retry_safety_admission.py > "${compile_log}" 2>&1
+  compile_status=$?
+
+elif [[ "${contract}" == *"tests.test_g1_isaac_denial_retry"* \
    && "${contract}" == *"services/full_e2e/denial_retry_gate.py scripts/evaluate_g1_isaac_denial_retry.py tests/test_g1_isaac_denial_retry.py"* ]]; then
   test_scope="m21-focused"
   m21_python_bin="/usr/bin/python3"
