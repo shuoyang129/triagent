@@ -21,7 +21,24 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="/usr/bin/python3"
 
 set +e
-if [[ "${contract}" == *"tests.test_g1_isaac_retry_safety_candidate"* \
+if [[ "${contract}" == *"tests.test_g1_isaac_retry_safety_candidate_admission" \
+   && "${contract}" == *"services/full_e2e/retry_safety_candidate_admission.py" \
+   && "${contract}" == *"scripts/evaluate_g1_isaac_retry_safety_candidate_admission.py" \
+   && "${contract}" == *"tests/test_g1_isaac_retry_safety_candidate_admission.py" ]]; then
+  test_scope="m24-exact-364"
+  m24_python_bin="/usr/bin/python3"
+  "${m24_python_bin}" -m unittest -v \
+    tests.test_g1_isaac_retry_safety_candidate_admission \
+    tests.test_g1_isaac_retry_safety_admission \
+    tests.test_g1_isaac_retry_safety_candidate > "${test_log}" 2>&1
+  test_status=$?
+  "${m24_python_bin}" -m py_compile \
+    services/full_e2e/retry_safety_candidate_admission.py \
+    scripts/evaluate_g1_isaac_retry_safety_candidate_admission.py \
+    tests/test_g1_isaac_retry_safety_candidate_admission.py > "${compile_log}" 2>&1
+  compile_status=$?
+
+elif [[ "${contract}" == *"tests.test_g1_isaac_retry_safety_candidate"* \
    && "${contract}" == *"services/full_e2e/retry_safety_candidate.py scripts/capture_isaac_g1_retry_safety_candidate.py tests/test_g1_isaac_retry_safety_candidate.py"* ]]; then
   test_scope="m23-focused"
   m23_python_bin="/usr/bin/python3"
