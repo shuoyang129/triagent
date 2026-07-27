@@ -21,10 +21,7 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="/usr/bin/python3"
 
 set +e
-if [[ "${contract}" == *"tests.test_g1_isaac_retry_safety_candidate_admission" \
-   && "${contract}" == *"services/full_e2e/retry_safety_candidate_admission.py" \
-   && "${contract}" == *"scripts/evaluate_g1_isaac_retry_safety_candidate_admission.py" \
-   && "${contract}" == *"tests/test_g1_isaac_retry_safety_candidate_admission.py" ]]; then
+if [[ "${contract}" == *"tests.test_g1_isaac_retry_safety_candidate_admission"* ]]; then
   test_scope="m24-exact-364"
   m24_python_bin="/usr/bin/python3"
   "${m24_python_bin}" -m unittest -v \
