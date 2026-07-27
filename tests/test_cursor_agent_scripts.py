@@ -143,6 +143,12 @@ def test_codex_adapter_has_exact_m16_verification_scope() -> None:
     assert "m17-focused" in text
     assert "m18-exact-38" in text
     assert "m19-exact-46" in text
+    assert "m20-focused" in text
+    assert 'm20_python_bin="/usr/bin/python3"' in text
+    assert "tests.test_g1_isaac_denial_feedback" in text
+    assert "services/full_e2e/denial_feedback.py" in text
+    assert "scripts/finalize_g1_isaac_denial_feedback.py" in text
+    assert "tests/test_g1_isaac_denial_feedback.py" in text
     assert 'm19_python_bin="/usr/bin/python3"' in text
     assert "tests.test_g1_isaac_premotion_denial" in text
     assert "services/full_e2e/premotion_denial.py" in text

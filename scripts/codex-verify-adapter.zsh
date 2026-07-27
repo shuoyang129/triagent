@@ -21,7 +21,20 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="/usr/bin/python3"
 
 set +e
-if [[ "${contract}" == *"tests.test_g1_isaac_premotion_denial"* \
+if [[ "${contract}" == *"tests.test_g1_isaac_denial_feedback"* \
+   && "${contract}" == *"services/full_e2e/denial_feedback.py scripts/finalize_g1_isaac_denial_feedback.py tests/test_g1_isaac_denial_feedback.py"* ]]; then
+  test_scope="m20-focused"
+  m20_python_bin="/usr/bin/python3"
+  "${m20_python_bin}" -m unittest -v \
+    tests.test_g1_isaac_denial_feedback > "${test_log}" 2>&1
+  test_status=$?
+  "${m20_python_bin}" -m py_compile \
+    services/full_e2e/denial_feedback.py \
+    scripts/finalize_g1_isaac_denial_feedback.py \
+    tests/test_g1_isaac_denial_feedback.py > "${compile_log}" 2>&1
+  compile_status=$?
+
+elif [[ "${contract}" == *"tests.test_g1_isaac_premotion_denial"* \
    && "${contract}" == *"services/full_e2e/premotion_denial.py scripts/evaluate_g1_isaac_premotion_denial.py tests/test_g1_isaac_premotion_denial.py"* ]]; then
   test_scope="m19-exact-46"
   m19_python_bin="/usr/bin/python3"
