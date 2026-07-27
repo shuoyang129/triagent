@@ -146,6 +146,12 @@ def test_codex_adapter_has_exact_m16_verification_scope() -> None:
     assert "m20-focused" in text
     assert "m21-focused" in text
     assert "m22-focused" in text
+    assert "m23-focused" in text
+    assert 'm23_python_bin="/usr/bin/python3"' in text
+    assert "tests.test_g1_isaac_retry_safety_candidate" in text
+    assert "services/full_e2e/retry_safety_candidate.py" in text
+    assert "scripts/capture_isaac_g1_retry_safety_candidate.py" in text
+    assert "tests/test_g1_isaac_retry_safety_candidate.py" in text
     assert 'm22_python_bin="/usr/bin/python3"' in text
     assert "tests.test_g1_isaac_retry_safety_admission" in text
     assert "services/full_e2e/retry_safety_admission.py" in text
