@@ -149,6 +149,11 @@ def test_codex_adapter_has_exact_m16_verification_scope() -> None:
     assert "m23-focused" in text
     assert "m24-exact-364" in text
     assert "m25-exact-83" in text
+    assert "m26-exact-62" in text
+    assert "tests.test_g1_physical_odom tests.test_g1_physical_readonly" in text
+    assert "services/g1_telemetry/physical_odom.py" in text
+    assert "scripts/collect_g1_physical_odom.py" in text
+    assert "tests/test_g1_physical_odom.py" in text
     assert 'm25_python_bin="/usr/bin/python3"' in text
     assert (
         "tests.test_g1_physical_readonly tests.test_g1_physical_readiness "

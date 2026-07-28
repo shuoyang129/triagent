@@ -21,7 +21,21 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="/usr/bin/python3"
 
 set +e
-if [[ "${contract}" == *"tests.test_g1_physical_readonly tests.test_g1_physical_readiness tests.test_g1_telemetry_contract tests.test_repository_policy"* \
+if [[ "${contract}" == *"tests.test_g1_physical_odom tests.test_g1_physical_readonly"* \
+   && "${contract}" == *"services/g1_telemetry/physical_odom.py scripts/collect_g1_physical_odom.py tests/test_g1_physical_odom.py"* ]]; then
+  test_scope="m26-exact-62"
+  m26_python_bin="/usr/bin/python3"
+  "${m26_python_bin}" -m unittest -v \
+    tests.test_g1_physical_odom \
+    tests.test_g1_physical_readonly > "${test_log}" 2>&1
+  test_status=$?
+  "${m26_python_bin}" -m py_compile \
+    services/g1_telemetry/physical_odom.py \
+    scripts/collect_g1_physical_odom.py \
+    tests/test_g1_physical_odom.py > "${compile_log}" 2>&1
+  compile_status=$?
+
+elif [[ "${contract}" == *"tests.test_g1_physical_readonly tests.test_g1_physical_readiness tests.test_g1_telemetry_contract tests.test_repository_policy"* \
    && "${contract}" == *"services/g1_telemetry/physical_readonly.py scripts/collect_g1_physical_readonly.py tests/test_g1_physical_readonly.py"* ]]; then
   test_scope="m25-exact-83"
   m25_python_bin="/usr/bin/python3"
