@@ -21,7 +21,23 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="/usr/bin/python3"
 
 set +e
-if [[ "${contract}" == *"tests.test_g1_isaac_retry_safety_candidate_admission"* ]]; then
+if [[ "${contract}" == *"tests.test_g1_physical_readonly tests.test_g1_physical_readiness tests.test_g1_telemetry_contract tests.test_repository_policy"* \
+   && "${contract}" == *"services/g1_telemetry/physical_readonly.py scripts/collect_g1_physical_readonly.py tests/test_g1_physical_readonly.py"* ]]; then
+  test_scope="m25-exact-83"
+  m25_python_bin="/usr/bin/python3"
+  "${m25_python_bin}" -m unittest -v \
+    tests.test_g1_physical_readonly \
+    tests.test_g1_physical_readiness \
+    tests.test_g1_telemetry_contract \
+    tests.test_repository_policy > "${test_log}" 2>&1
+  test_status=$?
+  "${m25_python_bin}" -m py_compile \
+    services/g1_telemetry/physical_readonly.py \
+    scripts/collect_g1_physical_readonly.py \
+    tests/test_g1_physical_readonly.py > "${compile_log}" 2>&1
+  compile_status=$?
+
+elif [[ "${contract}" == *"tests.test_g1_isaac_retry_safety_candidate_admission"* ]]; then
   test_scope="m24-exact-364"
   m24_python_bin="/usr/bin/python3"
   "${m24_python_bin}" -m unittest -v \

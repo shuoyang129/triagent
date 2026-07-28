@@ -148,6 +148,15 @@ def test_codex_adapter_has_exact_m16_verification_scope() -> None:
     assert "m22-focused" in text
     assert "m23-focused" in text
     assert "m24-exact-364" in text
+    assert "m25-exact-83" in text
+    assert 'm25_python_bin="/usr/bin/python3"' in text
+    assert (
+        "tests.test_g1_physical_readonly tests.test_g1_physical_readiness "
+        "tests.test_g1_telemetry_contract tests.test_repository_policy"
+    ) in text
+    assert "services/g1_telemetry/physical_readonly.py" in text
+    assert "scripts/collect_g1_physical_readonly.py" in text
+    assert "tests/test_g1_physical_readonly.py" in text
     assert 'm24_python_bin="/usr/bin/python3"' in text
     assert "tests.test_g1_isaac_retry_safety_candidate_admission" in text
     assert "services/full_e2e/retry_safety_candidate_admission.py" in text
