@@ -23,7 +23,7 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 set +e
 if [[ "${contract}" == *"tests.test_g1_physical_motion_admission tests.test_g1_physical_odom tests.test_g1_physical_readonly"* \
    && "${contract}" == *"services/g1_telemetry/physical_motion_admission.py scripts/evaluate_g1_physical_motion_admission.py tests/test_g1_physical_motion_admission.py"* ]]; then
-  test_scope="m27-exact-128"
+  test_scope="m27-exact-141"
   m27_python_bin="/usr/bin/python3"
   "${m27_python_bin}" -m unittest -v \
     tests.test_g1_physical_motion_admission \
