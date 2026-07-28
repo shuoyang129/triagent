@@ -21,7 +21,34 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="/usr/bin/python3"
 
 set +e
-if [[ "${contract}" == *"tests.test_g1_physical_motion_admission tests.test_g1_physical_odom tests.test_g1_physical_readonly"* \
+if [[ "${contract}" == *"tests/test_g1_physical_hold_rehearsal.py"* \
+   && "${contract}" == *"tests/test_m28_live_observers.py"* \
+   && "${contract}" == *"173 tests"* ]]; then
+  test_scope="m28-exact-173"
+  "${python_bin}" -m pytest -q \
+    tests/test_g1_physical_hold_rehearsal.py \
+    tests/test_m28_live_observers.py \
+    tests/test_g1_physical_motion_admission.py \
+    tests/test_g1_physical_odom.py \
+    tests/test_g1_physical_readonly.py \
+    tests/test_g1_physical_readiness.py \
+    tests/test_repository_policy.py > "${test_log}" 2>&1
+  test_status=$?
+  "${python_bin}" -m py_compile \
+    services/g1_telemetry/physical_hold_rehearsal.py \
+    scripts/collect_g1_physical_hold_rehearsal.py \
+    scripts/m28_observe_dcps_publications.py \
+    scripts/m28_observe_ros_odom.py \
+    scripts/m28_observe_unitree.py \
+    tests/test_g1_physical_hold_rehearsal.py \
+    tests/test_m28_live_observers.py > "${compile_log}" 2>&1
+  compile_status=$?
+  if [[ ${compile_status} -eq 0 ]]; then
+    "${python_bin}" -c "from pathlib import Path; from services.g1_telemetry.physical_hold_rehearsal import strict_json_file, validate_evidence; evidence, _ = strict_json_file(Path(\".physical_g1_runs/m28-g1-hold-rehearsal-20260728-170210/evidence.json\")); validate_evidence(evidence); print(\"EVIDENCE_VALID_FAIL_CLOSED\")" >> "${compile_log}" 2>&1
+    compile_status=$?
+  fi
+
+elif [[ "${contract}" == *"tests.test_g1_physical_motion_admission tests.test_g1_physical_odom tests.test_g1_physical_readonly"* \
    && "${contract}" == *"services/g1_telemetry/physical_motion_admission.py scripts/evaluate_g1_physical_motion_admission.py tests/test_g1_physical_motion_admission.py"* ]]; then
   test_scope="m27-exact-141"
   m27_python_bin="/usr/bin/python3"

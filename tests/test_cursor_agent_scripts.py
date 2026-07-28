@@ -139,6 +139,10 @@ print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":
 
 def test_codex_adapter_has_exact_m16_verification_scope() -> None:
     text = CODEX_ADAPTER.read_text(encoding="utf-8")
+    assert "m28-exact-173" in text
+    assert "tests/test_g1_physical_hold_rehearsal.py" in text
+    assert "tests/test_m28_live_observers.py" in text
+    assert "EVIDENCE_VALID_FAIL_CLOSED" in text
     assert "m16-exact-36" in text
     assert "m17-focused" in text
     assert "m18-exact-38" in text
