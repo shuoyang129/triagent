@@ -25,6 +25,17 @@ if [[ "${contract}" == *"tests/test_g1_physical_hold_rehearsal.py"* \
    && "${contract}" == *"tests/test_m28_live_observers.py"* \
    && "${contract}" == *"173 tests"* ]]; then
   test_scope="m28-exact-173"
+  m28_fixture_dir="triagent_inputs/m27/evidence"
+  m28_fixture_paths=()
+  mkdir -p "${m28_fixture_dir}"
+  if [[ ! -f "${m28_fixture_dir}/m25_evidence.json" ]]; then
+    cp /home/ys/works/robots/projects/humanoid/.physical_g1_runs/m25-g1-readonly-20260728-115500-v1/evidence.json "${m28_fixture_dir}/m25_evidence.json"
+    m28_fixture_paths+=("${m28_fixture_dir}/m25_evidence.json")
+  fi
+  if [[ ! -f "${m28_fixture_dir}/m26_evidence.json" ]]; then
+    cp /home/ys/works/robots/projects/humanoid/.physical_g1_runs/m26-g1-odom-20260728-132400-v2/evidence.json "${m28_fixture_dir}/m26_evidence.json"
+    m28_fixture_paths+=("${m28_fixture_dir}/m26_evidence.json")
+  fi
   "${python_bin}" -m pytest -q \
     tests/test_g1_physical_hold_rehearsal.py \
     tests/test_m28_live_observers.py \
@@ -34,6 +45,9 @@ if [[ "${contract}" == *"tests/test_g1_physical_hold_rehearsal.py"* \
     tests/test_g1_physical_readiness.py \
     tests/test_repository_policy.py > "${test_log}" 2>&1
   test_status=$?
+  if [[ ${test_status} -eq 0 ]] && ! grep -Fq "173 passed, 116 subtests passed" "${test_log}"; then
+    test_status=1
+  fi
   "${python_bin}" -m py_compile \
     services/g1_telemetry/physical_hold_rehearsal.py \
     scripts/collect_g1_physical_hold_rehearsal.py \
@@ -47,6 +61,10 @@ if [[ "${contract}" == *"tests/test_g1_physical_hold_rehearsal.py"* \
     "${python_bin}" -c "from pathlib import Path; from services.g1_telemetry.physical_hold_rehearsal import strict_json_file, validate_evidence; evidence, _ = strict_json_file(Path(\".physical_g1_runs/m28-g1-hold-rehearsal-20260728-170210/evidence.json\")); validate_evidence(evidence); print(\"EVIDENCE_VALID_FAIL_CLOSED\")" >> "${compile_log}" 2>&1
     compile_status=$?
   fi
+  for m28_fixture_path in "${m28_fixture_paths[@]}"; do
+    rm -f -- "${m28_fixture_path}"
+  done
+  rmdir "${m28_fixture_dir}" "${m28_fixture_dir:h}" "${m28_fixture_dir:h:h}" 2>/dev/null
 
 elif [[ "${contract}" == *"tests.test_g1_physical_motion_admission tests.test_g1_physical_odom tests.test_g1_physical_readonly"* \
    && "${contract}" == *"services/g1_telemetry/physical_motion_admission.py scripts/evaluate_g1_physical_motion_admission.py tests/test_g1_physical_motion_admission.py"* ]]; then

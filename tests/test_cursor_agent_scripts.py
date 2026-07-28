@@ -143,6 +143,9 @@ def test_codex_adapter_has_exact_m16_verification_scope() -> None:
     assert "tests/test_g1_physical_hold_rehearsal.py" in text
     assert "tests/test_m28_live_observers.py" in text
     assert "EVIDENCE_VALID_FAIL_CLOSED" in text
+    assert "m25-g1-readonly-20260728-115500-v1" in text
+    assert "m26-g1-odom-20260728-132400-v2" in text
+    assert "173 passed, 116 subtests passed" in text
     assert "m16-exact-36" in text
     assert "m17-focused" in text
     assert "m18-exact-38" in text
