@@ -139,6 +139,15 @@ print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":
 
 def test_codex_adapter_has_exact_m16_verification_scope() -> None:
     text = CODEX_ADAPTER.read_text(encoding="utf-8")
+    assert "m33-exact-36-265-149" in text
+    assert "tests.test_g1_physical_single_writer_remediation" in text
+    assert "expected 265/265" in text
+    assert "Ran 36 tests" in text
+    assert "Ran 265 tests" in text
+    assert "services/g1_telemetry/physical_single_writer_remediation.py" in text
+    assert "scripts/evaluate_g1_physical_single_writer_remediation.py" in text
+    assert "scripts/collect_g1_remote_owner_attestation.py" in text
+    assert "tests/test_g1_physical_single_writer_remediation.py" in text
     assert "m32-exact-34-229-149" in text
     assert "tests.test_g1_physical_motion_admission_reeval" in text
     assert "expected 229/229" in text

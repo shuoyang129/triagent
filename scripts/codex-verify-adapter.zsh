@@ -14,7 +14,7 @@ compile_log="$(mktemp "${TMPDIR:-/tmp}/triagent-codex-compile.XXXXXX")"
 diff_log="$(mktemp "${TMPDIR:-/tmp}/triagent-codex-diff.XXXXXX")"
 cleanup() {
   rm -f -- "${test_log}" "${compile_log}" "${diff_log}"
-  if [[ "${m32_materialized:-false}" == true ]]; then
+  if [[ "${m32_materialized:-false}" == true || "${m33_materialized:-false}" == true ]]; then
     rm -rf -- ".physical_g1_runs"
   fi
 }
@@ -26,7 +26,68 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="/usr/bin/python3"
 
 set +e
-if [[ "${contract}" == *"tests.test_g1_physical_motion_admission_reeval"* \
+if [[ "${contract}" == *"tests.test_g1_physical_single_writer_remediation"* \
+   && "${contract}" == *"expected 265/265"* \
+   && "${contract}" == *"expected 149/149"* ]]; then
+  test_scope="m33-exact-36-265-149"
+  m33_python_bin="/home/ys/miniforge3/bin/python3"
+  test_status=0
+  m33_materialized=false
+  if [[ ! -e ".physical_g1_runs" ]]; then
+    mkdir -p ".physical_g1_runs"
+    for source in \
+      m25-g1-readonly-20260728-115500-v1 \
+      m26-g1-odom-20260728-132400-v2 \
+      m27-g1-motion-admission-20260728-143310 \
+      m28-g1-hold-rehearsal-20260728-170210 \
+      m29-g1-owner-diagnostic-20260729-173206 \
+      m30-g1-qos-diagnostic-20260729-183752; do
+      cp -a "/home/ys/works/robots/projects/humanoid/.physical_g1_runs/${source}" \
+        ".physical_g1_runs/${source}"
+    done
+    m33_materialized=true
+  fi
+  "${m33_python_bin}" -m unittest -v \
+    tests.test_g1_physical_single_writer_remediation > "${test_log}" 2>&1
+  [[ $? -eq 0 ]] || test_status=1
+  "${m33_python_bin}" -m unittest \
+    tests.test_g1_physical_motion_admission \
+    tests.test_g1_physical_hold_rehearsal \
+    tests.test_g1_physical_owner_interlock \
+    tests.test_g1_safety_arbitration \
+    tests.test_m29_dcps_owner_observer \
+    tests.test_m29_cpp_interlock_contract \
+    tests.test_m30_qos_observer \
+    tests.test_m30_cpp_arbitration_contract \
+    tests.test_m31_lease_lifecycle \
+    tests.test_g1_physical_motion_admission_reeval \
+    tests.test_g1_physical_single_writer_remediation >> "${test_log}" 2>&1
+  [[ $? -eq 0 ]] || test_status=1
+  "${m33_python_bin}" -m unittest \
+    tests.test_protected_isaac_mainline \
+    tests.test_protected_isaac_sensors \
+    tests.test_protected_isaac_robustness \
+    tests.test_actual_isaac_runtime_evidence >> "${test_log}" 2>&1
+  [[ $? -eq 0 ]] || test_status=1
+  "${m33_python_bin}" -m unittest tests.test_repository_policy >> "${test_log}" 2>&1
+  [[ $? -eq 0 ]] || test_status=1
+  if ! grep -Fq "Ran 36 tests" "${test_log}" \
+     || ! grep -Fq "Ran 265 tests" "${test_log}" \
+     || ! grep -Fq "Ran 149 tests" "${test_log}" \
+     || ! grep -Fq "Ran 15 tests" "${test_log}"; then
+    test_status=1
+  fi
+  "${m33_python_bin}" -m py_compile \
+    services/g1_telemetry/physical_single_writer_remediation.py \
+    scripts/evaluate_g1_physical_single_writer_remediation.py \
+    scripts/collect_g1_remote_owner_attestation.py \
+    tests/test_g1_physical_single_writer_remediation.py > "${compile_log}" 2>&1
+  compile_status=$?
+  if [[ "${m33_materialized}" == true ]]; then
+    rm -rf -- ".physical_g1_runs"
+  fi
+
+elif [[ "${contract}" == *"tests.test_g1_physical_motion_admission_reeval"* \
    && "${contract}" == *"expected 229/229"* \
    && "${contract}" == *"expected 149/149"* ]]; then
   test_scope="m32-exact-34-229-149"
