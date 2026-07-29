@@ -53,6 +53,7 @@ def test_concrete_dgx_profile_uses_verified_paths_and_budgets() -> None:
         "command": ["/home/ys/.opencode/bin/opencode"],
         "estimated_usd": 1.0,
         "probe_estimated_usd": 0.25,
+        "smoke_timeout_seconds": 180,
     }
     assert config["budget"]["max_agent_calls"] == 20
     assert config["budget"]["max_minutes"] == 60

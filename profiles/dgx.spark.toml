@@ -35,6 +35,7 @@ model = "deepseek/deepseek-v4-pro"
 command = ["/home/ys/.opencode/bin/opencode"]
 estimated_usd = 1.0
 probe_estimated_usd = 0.25
+smoke_timeout_seconds = 180
 
 [budget]
 max_agent_calls = 20
