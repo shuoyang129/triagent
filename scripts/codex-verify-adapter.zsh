@@ -12,7 +12,12 @@ contract="$(<&0)"
 test_log="$(mktemp "${TMPDIR:-/tmp}/triagent-codex-tests.XXXXXX")"
 compile_log="$(mktemp "${TMPDIR:-/tmp}/triagent-codex-compile.XXXXXX")"
 diff_log="$(mktemp "${TMPDIR:-/tmp}/triagent-codex-diff.XXXXXX")"
-cleanup() { rm -f -- "${test_log}" "${compile_log}" "${diff_log}"; }
+cleanup() {
+  rm -f -- "${test_log}" "${compile_log}" "${diff_log}"
+  if [[ "${m32_materialized:-false}" == true ]]; then
+    rm -rf -- ".physical_g1_runs"
+  fi
+}
 trap cleanup EXIT HUP INT TERM
 
 export PYTHONDONTWRITEBYTECODE=1
@@ -21,7 +26,66 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="/usr/bin/python3"
 
 set +e
-if [[ "${contract}" == *"tests/test_g1_physical_hold_rehearsal.py"* \
+if [[ "${contract}" == *"tests.test_g1_physical_motion_admission_reeval"* \
+   && "${contract}" == *"expected 229/229"* \
+   && "${contract}" == *"expected 149/149"* ]]; then
+  test_scope="m32-exact-34-229-149"
+  m32_python_bin="/home/ys/miniforge3/bin/python3"
+  test_status=0
+  m32_materialized=false
+  if [[ ! -e ".physical_g1_runs" ]]; then
+    mkdir -p ".physical_g1_runs"
+    for source in \
+      m25-g1-readonly-20260728-115500-v1 \
+      m26-g1-odom-20260728-132400-v2 \
+      m27-g1-motion-admission-20260728-143310 \
+      m28-g1-hold-rehearsal-20260728-170210 \
+      m29-g1-owner-diagnostic-20260729-173206 \
+      m30-g1-qos-diagnostic-20260729-183752; do
+      cp -a "/home/ys/works/robots/projects/humanoid/.physical_g1_runs/${source}" \
+        ".physical_g1_runs/${source}"
+    done
+    m32_materialized=true
+  fi
+  "${m32_python_bin}" -m unittest -v \
+    tests.test_g1_physical_motion_admission_reeval > "${test_log}" 2>&1
+  [[ $? -eq 0 ]] || test_status=1
+  "${m32_python_bin}" -m unittest \
+    tests.test_g1_physical_motion_admission \
+    tests.test_g1_physical_hold_rehearsal \
+    tests.test_g1_physical_owner_interlock \
+    tests.test_g1_safety_arbitration \
+    tests.test_m29_dcps_owner_observer \
+    tests.test_m29_cpp_interlock_contract \
+    tests.test_m30_qos_observer \
+    tests.test_m30_cpp_arbitration_contract \
+    tests.test_m31_lease_lifecycle \
+    tests.test_g1_physical_motion_admission_reeval >> "${test_log}" 2>&1
+  [[ $? -eq 0 ]] || test_status=1
+  "${m32_python_bin}" -m unittest \
+    tests.test_protected_isaac_mainline \
+    tests.test_protected_isaac_sensors \
+    tests.test_protected_isaac_robustness \
+    tests.test_actual_isaac_runtime_evidence >> "${test_log}" 2>&1
+  [[ $? -eq 0 ]] || test_status=1
+  "${m32_python_bin}" -m unittest tests.test_repository_policy >> "${test_log}" 2>&1
+  [[ $? -eq 0 ]] || test_status=1
+  if ! grep -Fq "Ran 34 tests" "${test_log}" \
+     || ! grep -Fq "Ran 229 tests" "${test_log}" \
+     || ! grep -Fq "Ran 149 tests" "${test_log}" \
+     || ! grep -Fq "Ran 15 tests" "${test_log}"; then
+    test_status=1
+  fi
+  "${m32_python_bin}" -m py_compile \
+    services/g1_telemetry/physical_motion_admission_reeval.py \
+    scripts/evaluate_g1_physical_motion_admission_reeval.py \
+    tests/test_g1_physical_motion_admission_reeval.py > "${compile_log}" 2>&1
+  compile_status=$?
+  if [[ "${m32_materialized}" == true ]]; then
+    rm -rf -- ".physical_g1_runs"
+  fi
+
+elif [[ "${contract}" == *"tests/test_g1_physical_hold_rehearsal.py"* \
    && "${contract}" == *"tests/test_m28_live_observers.py"* \
    && "${contract}" == *"173 tests"* ]]; then
   test_scope="m28-exact-173"
