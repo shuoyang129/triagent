@@ -86,12 +86,16 @@ def _agent_enabled(config: dict, name: str, *, default: bool) -> bool:
     return value
 
 
-def _deepseek_options(config: dict) -> dict[str, str]:
+def _deepseek_options(config: dict) -> dict[str, object]:
     section = config.get("agents", {}).get("deepseek", {})
     model = section.get("model", "deepseek/deepseek-v4-pro")
     if not isinstance(model, str) or not model:
         raise ValueError("invalid DeepSeek model")
-    return {"model": model, "command": _profile_command(config, "deepseek")}
+    return {
+        "model": model,
+        "command": _profile_command(config, "deepseek"),
+        "smoke_timeout_seconds": section.get("smoke_timeout_seconds", 30),
+    }
 
 
 def _profile_digest(config: dict) -> str:

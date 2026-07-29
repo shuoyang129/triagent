@@ -113,6 +113,31 @@ def test_opencode_deepseek_uses_pro_model_and_restricted_inline_config(
     assert permissions["edit"][".git/*"] == "deny"
 
 
+def test_opencode_deepseek_smoke_timeout_is_configurable_and_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-value")
+    runner = OpenCodeRunner()
+    adapter = DeepSeekAdapter(
+        enabled=True,
+        billing_confirmed=True,
+        live_confirmed=True,
+        smoke_timeout_seconds=180,
+        runner=runner,
+        probe_dir=tmp_path,
+    )
+
+    assert adapter.capabilities().available is True
+    smoke_call = next(
+        call for call in runner.calls if "triagent-opencode-probe-" in call[0][-1]
+    )
+    assert smoke_call[2] == 180
+
+    for invalid in (True, 0, 301, float("inf"), "180"):
+        with pytest.raises(ValueError, match="smoke timeout"):
+            DeepSeekAdapter(smoke_timeout_seconds=invalid)
+
+
 def test_opencode_deepseek_parses_json_event_and_uses_private_attachment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

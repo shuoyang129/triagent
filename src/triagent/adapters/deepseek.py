@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import tempfile
 import time
@@ -32,6 +33,9 @@ _ALLOWED_MODELS = frozenset(
         "deepseek/deepseek-reasoner",
     }
 )
+_MIN_SMOKE_TIMEOUT_SECONDS = 1
+_MAX_SMOKE_TIMEOUT_SECONDS = 300
+
 DeepSeekDiagnostic = Literal[
     "deepseek-disabled",
     "deepseek-billing-not-confirmed",
@@ -163,6 +167,7 @@ class DeepSeekAdapter(AgentAdapter):
         command: Sequence[str] = ("opencode",),
         runner: ProcessRunner | None = None,
         probe_dir: Path | None = None,
+        smoke_timeout_seconds: float = 30,
         **legacy: object,
     ) -> None:
         if legacy:
@@ -171,6 +176,15 @@ class DeepSeekAdapter(AgentAdapter):
             raise ValueError("unsupported DeepSeek model")
         if not command or any(not isinstance(part, str) or not part for part in command):
             raise ValueError("invalid OpenCode command")
+        if (
+            isinstance(smoke_timeout_seconds, bool)
+            or not isinstance(smoke_timeout_seconds, (int, float))
+            or not math.isfinite(smoke_timeout_seconds)
+            or not _MIN_SMOKE_TIMEOUT_SECONDS
+            <= smoke_timeout_seconds
+            <= _MAX_SMOKE_TIMEOUT_SECONDS
+        ):
+            raise ValueError("DeepSeek smoke timeout must be between 1 and 300 seconds")
         default_runner, env, secrets = runtime(("DEEPSEEK_API_KEY",), secret_values)
         self._runner = runner or default_runner
         self._env = {
@@ -190,6 +204,7 @@ class DeepSeekAdapter(AgentAdapter):
         self._model = model
         self._command = list(command)
         self._probe_dir = probe_dir
+        self._smoke_timeout_seconds = float(smoke_timeout_seconds)
         self._ready_until = 0.0
 
     def estimate_cost(self, request: AgentRequest | None) -> CostEstimate:
@@ -222,7 +237,7 @@ class DeepSeekAdapter(AgentAdapter):
                     prompt,
                 ],
                 directory,
-                30,
+                self._smoke_timeout_seconds,
             )
             if process.timed_out or process.returncode != 0:
                 return False, _failure_diagnostic(process)

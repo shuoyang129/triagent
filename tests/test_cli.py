@@ -140,6 +140,19 @@ def test_agent_enabled_defaults_cursor_on_and_accepts_explicit_disable() -> None
         )
 
 
+def test_deepseek_options_passes_bounded_smoke_timeout() -> None:
+    config = {
+        "agents": {
+            "deepseek": {
+                "command": ["opencode"],
+                "smoke_timeout_seconds": 180,
+            }
+        }
+    }
+
+    assert cli_module._deepseek_options(config)["smoke_timeout_seconds"] == 180
+
+
 def _live_profile(path: Path, *, cursor_command: str = "cursor", deepseek: bool = False) -> dict:
     path.write_text(f'''\
 [agents.cursor]
