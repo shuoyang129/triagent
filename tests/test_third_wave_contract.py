@@ -90,3 +90,21 @@ def test_handoff_diff_uses_persisted_base_and_all_change_categories(tmp_path):
     diff=json.loads(path.read_text(encoding="utf-8"))["final_diff"]
     for marker in ("committed-change","staged-change","unstaged-change","untracked-change"): assert marker in diff
     assert "+++ b/untracked.txt" in diff
+
+def test_handoff_propagates_persisted_implementer_artifacts(tmp_path):
+    store=TaskStore(tmp_path); task=store.create_task(spec())
+    store.record_outcome(
+        task.id,
+        StageOutcome(
+            stage="implement",
+            status="passed",
+            summary="completed",
+            artifacts=["M31_PRODUCT_DIFF.patch","review/m31_contact_sheet.png"],
+        ),
+    )
+    path=Orchestrator(store,FakeAgent([]),FakeAgent([]),FakeAgent([]))._write_handoff(task.id)
+    payload=json.loads(path.read_text(encoding="utf-8"))
+    assert payload["artifacts"] == [
+        "M31_PRODUCT_DIFF.patch",
+        "review/m31_contact_sheet.png",
+    ]

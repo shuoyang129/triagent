@@ -185,6 +185,8 @@ class Orchestrator:
 
     def _write_handoff(self, task_id: str, *, tests: list[str] | None = None) -> Path:
         task=self.store.load(task_id); run=self.store.runs_root/task_id; work=run/"worktree"; meta=self.store.workspace(task_id)
+        implement_outcome=self.store.outcomes(task_id).get("implement")
+        artifacts=list(implement_outcome.artifacts) if implement_outcome is not None else []
         if meta is None and all(type(a) is FakeAgent for a in (self.implementer,self.verifier,self.reviewer)):
             diff=""
         else:
@@ -192,7 +194,7 @@ class Orchestrator:
             if meta is None or not meta["reviewed_commit"]:raise ValueError("candidate missing")
             diff=self.store._git_plumbing(work,["diff","--binary",meta["base_commit"],meta["reviewed_commit"]]).decode("utf-8","replace")
           except Exception as error: raise RuntimeError("canonical handoff generation failed") from error
-        payload={"task_spec":task.spec.model_dump(mode="json"),"final_diff":diff,"tests":tests or [],"artifacts":[],"rollback":"preserve task branch; remove worktree only after approval","completed":["implementation"]}
+        payload={"task_spec":task.spec.model_dump(mode="json"),"final_diff":diff,"tests":tests or [],"artifacts":artifacts,"rollback":"preserve task branch; remove worktree only after approval","completed":["implementation"]}
         path=run/"handoff.json"; path.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8"); return path
 
     @staticmethod
