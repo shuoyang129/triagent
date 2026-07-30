@@ -31,7 +31,7 @@ estimated_usd = 1.0
 
 [agents.deepseek]
 enabled = true
-model = "deepseek/deepseek-v4-pro"
+model = "deepseek/deepseek-v4-flash"
 command = ["/home/ys/.opencode/bin/opencode"]
 estimated_usd = 1.0
 probe_estimated_usd = 0.25
