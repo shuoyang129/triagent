@@ -15,6 +15,7 @@ diff_log="$(mktemp "${TMPDIR:-/tmp}/triagent-codex-diff.XXXXXX")"
 artifact_log="$(mktemp "${TMPDIR:-/tmp}/triagent-codex-artifact.XXXXXX")"
 cleanup() {
   rm -f -- "${test_log}" "${compile_log}" "${diff_log}" "${artifact_log}"
+  [[ -n "${m36_eval_dir:-}" ]] && rm -rf -- "${m36_eval_dir}"
   if [[ "${m32_materialized:-false}" == true || "${m33_materialized:-false}" == true ]]; then
     rm -rf -- ".physical_g1_runs"
   fi
@@ -73,6 +74,54 @@ elif [[ "${contract}" == *"tests/test_g1_sonic_isaac_runtime.py"* \
     scripts/evaluate_g1_sonic_isaac_runtime.py \
     tests/test_g1_sonic_isaac_runtime.py > "${compile_log}" 2>&1
   compile_status=$?
+  expected_expiry_sha="cd5c0c0f6018cf873afd282ab3d28e756a476cf975604b02708196ddfc9af686"
+  expected_revoke_sha="435399928850af1e6c3fd1be104b1916595c3478be67bb03b6073cb6b57ff19c"
+  expected_aggregate_sha="cc6ba6ad3239eb1d12d652de5d098422145608755ef5915a0053033a7f47291f"
+  expected_decision_sha="16fd71c7ee062d4a7abd944304b13cc650dd5fdef86c14e4754e2a4344be5e76"
+  expected_png_sha="55d97fd7af3c004e7051d0e02333ee8bca7a601f9311db94a30d94f64a04e5f5"
+  m36_dir="docs/evidence/runtime/m36_sonic_isaac_actual_20260730_v4"
+  actual_expiry_sha="$(sha256sum "${m36_dir}/expiry.json" 2>/dev/null | cut -d " " -f 1)"
+  actual_revoke_sha="$(sha256sum "${m36_dir}/revoke.json" 2>/dev/null | cut -d " " -f 1)"
+  actual_aggregate_sha="$(sha256sum "${m36_dir}/aggregate.json" 2>/dev/null | cut -d " " -f 1)"
+  actual_decision_sha="$(sha256sum "${m36_dir}/decision.json" 2>/dev/null | cut -d " " -f 1)"
+  actual_png_sha="$(sha256sum docs/evidence/m36_sonic_isaac_runtime.png 2>/dev/null | cut -d " " -f 1)"
+  png_description="$(file docs/evidence/m36_sonic_isaac_runtime.png 2>/dev/null)"
+  m36_eval_dir="$(mktemp -d "${TMPDIR:-/tmp}/triagent-m36-eval.XXXXXX")"
+  "${python_bin}" scripts/evaluate_g1_sonic_isaac_runtime.py \
+    --expiry "${m36_dir}/expiry.json" \
+    --revoke "${m36_dir}/revoke.json" \
+    --aggregate "${m36_dir}/aggregate.json" \
+    --output "${m36_eval_dir}/decision.json" > "${artifact_log}" 2>&1
+  evaluator_status=$?
+  replay_decision_sha="$(sha256sum "${m36_eval_dir}/decision.json" 2>/dev/null | cut -d " " -f 1)"
+  if [[ ${evaluator_status} -eq 0 \
+     && "${actual_expiry_sha}" == "${expected_expiry_sha}" \
+     && "${actual_revoke_sha}" == "${expected_revoke_sha}" \
+     && "${actual_aggregate_sha}" == "${expected_aggregate_sha}" \
+     && "${actual_decision_sha}" == "${expected_decision_sha}" \
+     && "${replay_decision_sha}" == "${expected_decision_sha}" \
+     && "${actual_png_sha}" == "${expected_png_sha}" \
+     && "${png_description}" == *"PNG image data, 1200 x 800, 8-bit/color RGB, non-interlaced"* ]]; then
+    artifact_status=0
+  else
+    artifact_status=1
+  fi
+  {
+    print -r -- "M36_EVALUATOR_EXIT_STATUS=${evaluator_status}"
+    print -r -- "M36_EXPIRY_EXPECTED_SHA256=${expected_expiry_sha}"
+    print -r -- "M36_EXPIRY_ACTUAL_SHA256=${actual_expiry_sha}"
+    print -r -- "M36_REVOKE_EXPECTED_SHA256=${expected_revoke_sha}"
+    print -r -- "M36_REVOKE_ACTUAL_SHA256=${actual_revoke_sha}"
+    print -r -- "M36_AGGREGATE_EXPECTED_SHA256=${expected_aggregate_sha}"
+    print -r -- "M36_AGGREGATE_ACTUAL_SHA256=${actual_aggregate_sha}"
+    print -r -- "M36_DECISION_EXPECTED_SHA256=${expected_decision_sha}"
+    print -r -- "M36_DECISION_ACTUAL_SHA256=${actual_decision_sha}"
+    print -r -- "M36_REPLAY_DECISION_SHA256=${replay_decision_sha}"
+    print -r -- "M36_PNG_EXPECTED_SHA256=${expected_png_sha}"
+    print -r -- "M36_PNG_ACTUAL_SHA256=${actual_png_sha}"
+    print -r -- "M36_PNG_FILE=${png_description}"
+    print -r -- "VISUAL_SEMANTIC_REVIEW_DEFERRED_TO_REQUIRED_ANTIGRAVITY_STAGE=true"
+  } >> "${artifact_log}"
 
 elif [[ ( "${contract}" == *"tests/test_g1_sonic_writer_admission.py"* \
       && "${contract}" == *"services/g1_telemetry/sonic_writer_admission.py"* \
