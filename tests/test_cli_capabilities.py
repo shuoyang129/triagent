@@ -166,6 +166,27 @@ def test_antigravity_adapter_enables_strict_fenced_json_transport(agent_request:
     assert result.status is AgentStatus.SUCCEEDED
 
 
+def test_antigravity_adapter_forwards_ssh_session_for_oauth_selection(
+    agent_request: AgentRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SSH_CONNECTION", "client 12345 server 22")
+    handoff = agent_request.workdir / "handoff.json"
+    handoff.write_text("{}", encoding="utf-8")
+    runner = FakeRunner(completed(json.dumps(review_payload())))
+
+    result = AntigravityAdapter(
+        runner=runner,
+        acl_verifier=lambda directory, file: True,
+    ).run(agent_request.model_copy(update={
+        "role": AgentRole.REVIEWER,
+        "handoff_file": handoff,
+    }))
+
+    assert result.status is AgentStatus.SUCCEEDED
+    assert runner.calls[0][3]["SSH_CONNECTION"] == "client 12345 server 22"
+
+
 def test_codex_capabilities_use_read_only_probes(tmp_path: Path) -> None:
     runner = FakeRunner(completed("codex-cli 1.2\n"), completed("Logged in\n"))
     capabilities = CodexAdapter(runner=runner).capabilities()

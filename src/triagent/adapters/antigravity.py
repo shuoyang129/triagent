@@ -11,7 +11,10 @@ class AntigravityAdapter(AgentAdapter):
     identity = "antigravity"
     allowed_roles = frozenset({AgentRole.REVIEWER})
     def __init__(self, runner: ProcessRunner | None = None, secret_values: Sequence[str] = (), command: Sequence[str] = ("agy.exe",), estimated_usd: float | None = None, acl_verifier=None) -> None:
-        default_runner, self._env, self._secrets = runtime(("AGY_API_KEY", "GOOGLE_API_KEY"), secret_values)
+        default_runner, self._env, self._secrets = runtime(
+            ("AGY_API_KEY", "GOOGLE_API_KEY", "SSH_CONNECTION"),
+            secret_values,
+        )
         self._runner = runner or default_runner
         self._command = list(command)
         self._estimated_usd=estimated_usd
