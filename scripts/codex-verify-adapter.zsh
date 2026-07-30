@@ -42,6 +42,26 @@ if [[ "${contract}" == *"tests/test_g1_sonic_writer_admission.py"* \
     scripts/evaluate_g1_sonic_writer_admission.py \
     tests/test_g1_sonic_writer_admission.py > "${compile_log}" 2>&1
   compile_status=$?
+  expected_png_sha="76de8e88eb738a1331547e67326f17f518b11ac0f7a611d153f8687bf37aedfe"
+  expected_decision_sha="ac6bea8cfd69afcc3a8791f64d6cb2a6fd6f8e13b1fae7245b7317b260e85794"
+  actual_png_sha="$(sha256sum docs/evidence/m35_sonic_writer_admission.png 2>/dev/null | cut -d " " -f 1)"
+  actual_decision_sha="$(sha256sum docs/evidence/m35_sonic_writer_admission.json 2>/dev/null | cut -d " " -f 1)"
+  png_description="$(file docs/evidence/m35_sonic_writer_admission.png 2>/dev/null)"
+  if [[ "${actual_png_sha}" == "${expected_png_sha}" \
+     && "${actual_decision_sha}" == "${expected_decision_sha}" \
+     && "${png_description}" == *"PNG image data, 1200 x 760, 8-bit/color RGB, non-interlaced"* ]]; then
+    artifact_status=0
+  else
+    artifact_status=1
+  fi
+  {
+    print -r -- "M35_PNG_EXPECTED_SHA256=${expected_png_sha}"
+    print -r -- "M35_PNG_ACTUAL_SHA256=${actual_png_sha}"
+    print -r -- "M35_DECISION_EXPECTED_SHA256=${expected_decision_sha}"
+    print -r -- "M35_DECISION_ACTUAL_SHA256=${actual_decision_sha}"
+    print -r -- "M35_PNG_FILE=${png_description}"
+    print -r -- "VISUAL_SEMANTIC_REVIEW_DEFERRED_TO_REQUIRED_ANTIGRAVITY_STAGE=true"
+  } > "${artifact_log}"
 
 elif [[ "${contract}" == *"tests/test_g1_pc1_blackbox_boundary.py"* \
    && "${contract}" == *"33287da3f641c53ae2e79ff56c34d96d9b1b64f58aeb5b24a416ddfc23c1d1e0"* ]]; then
