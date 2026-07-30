@@ -128,6 +128,21 @@ elif [[ "${contract}" == *"tests/test_g1_sonic_isaac_runtime.py"* \
     print -r -- "VISUAL_SEMANTIC_REVIEW_DEFERRED_TO_REQUIRED_ANTIGRAVITY_STAGE=true"
   } >> "${artifact_log}"
 
+elif [[ "${contract}" == *"tests/test_g1_sonic_physical_readiness.py"* \
+   && "${contract}" == *"services/g1_telemetry/sonic_physical_readiness.py"* \
+   && "${contract}" == *"scripts/collect_g1_sonic_physical_readiness.py"* \
+   && "${contract}" == *"scripts/evaluate_g1_sonic_physical_readiness.py"* ]]; then
+  test_scope="m37-focused"
+  "${python_bin}" -m pytest -q \
+    tests/test_g1_sonic_physical_readiness.py > "${test_log}" 2>&1
+  test_status=$?
+  "${python_bin}" -m py_compile \
+    services/g1_telemetry/sonic_physical_readiness.py \
+    scripts/collect_g1_sonic_physical_readiness.py \
+    scripts/evaluate_g1_sonic_physical_readiness.py \
+    tests/test_g1_sonic_physical_readiness.py > "${compile_log}" 2>&1
+  compile_status=$?
+
 elif [[ ( "${contract}" == *"tests/test_g1_sonic_writer_admission.py"* \
       && "${contract}" == *"services/g1_telemetry/sonic_writer_admission.py"* \
       && "${contract}" == *"scripts/simulate_g1_sonic_writer_admission.py"* \
