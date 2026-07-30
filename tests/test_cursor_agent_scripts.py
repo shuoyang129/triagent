@@ -289,7 +289,14 @@ def test_codex_adapter_has_exact_m38_zero_command_takeover_scope() -> None:
     assert "scripts/collect_g1_sonic_zero_command_takeover.py" in text
     assert "scripts/evaluate_g1_sonic_zero_command_takeover.py" in text
     assert "configs/g1_sonic_zero_command_takeover_policy.json" in text
-    assert '"${python_bin}" -m json.tool' in text
+    m38_body = text.split('test_scope="m38-zero-command-takeover-focused"', 1)[1].split(
+        'elif [[ "${contract}" == *"tests/test_g1_sonic_physical_readiness.py"*', 1
+    )[0]
+    assert '"${python_bin}" -m json.tool' in m38_body
+    assert '> "${artifact_log}" 2>&1' in m38_body
+    assert 'policy_json_status=$?' in m38_body
+    assert '>> "${compile_log}" 2>&1' not in m38_body
+    assert "POLICY_JSON_EXIT_STATUS=" in text
 
 
 def test_agy_adapter_propagates_safe_auth_marker(tmp_path: Path) -> None:

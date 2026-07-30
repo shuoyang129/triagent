@@ -28,6 +28,7 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="/usr/bin/python3"
 
 set +e
+policy_json_status="not-requested"
 artifact_status="not-requested"
 cpp_syntax_status="not-requested"
 if [[ "${contract}" == *"tests/test_g1_sonic_isaac_semantics.py"* \
@@ -151,8 +152,9 @@ elif [[ "${contract}" == *"tests/test_g1_sonic_zero_command_takeover.py"* \
   if [[ ${compile_status} -eq 0 ]]; then
     "${python_bin}" -m json.tool \
       configs/g1_sonic_zero_command_takeover_policy.json \
-      >> "${compile_log}" 2>&1
-    compile_status=$?
+      > "${artifact_log}" 2>&1
+    policy_json_status=$?
+    [[ ${policy_json_status} -eq 0 ]] || compile_status=${policy_json_status}
   fi
 
 elif [[ "${contract}" == *"tests/test_g1_sonic_physical_readiness.py"* \
@@ -604,6 +606,8 @@ evidence+=$'\n'
 evidence+="UNITTEST_EXIT_STATUS=${test_status}"
 evidence+=$'\nPY_COMPILE_EXIT_STATUS='
 evidence+="${compile_status}"
+evidence+=$'\nPOLICY_JSON_EXIT_STATUS='
+evidence+="${policy_json_status}"
 evidence+=$'\nCPP_SYNTAX_EXIT_STATUS='
 evidence+="${cpp_syntax_status}"
 evidence+=$'\nGIT_DIFF_CHECK_EXIT_STATUS='
