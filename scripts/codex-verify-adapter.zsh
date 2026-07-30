@@ -128,6 +128,28 @@ elif [[ "${contract}" == *"tests/test_g1_sonic_isaac_runtime.py"* \
     print -r -- "VISUAL_SEMANTIC_REVIEW_DEFERRED_TO_REQUIRED_ANTIGRAVITY_STAGE=true"
   } >> "${artifact_log}"
 
+elif [[ "${contract}" == *"tests/test_g1_sonic_zero_command_takeover.py"* \
+   && "${contract}" == *"services/g1_telemetry/sonic_zero_command_takeover.py"* \
+   && "${contract}" == *"scripts/evaluate_g1_sonic_zero_command_takeover.py"* \
+   && "${contract}" == *"configs/g1_sonic_zero_command_takeover_policy.json"* ]]; then
+  test_scope="m38-zero-command-takeover-focused"
+  "${python_bin}" -m pytest -q \
+    tests/test_g1_sonic_zero_command_takeover.py \
+    tests/test_g1_sonic_physical_readiness.py \
+    tests/test_g1_physical_hold_rehearsal.py > "${test_log}" 2>&1
+  test_status=$?
+  "${python_bin}" -m py_compile \
+    services/g1_telemetry/sonic_zero_command_takeover.py \
+    scripts/evaluate_g1_sonic_zero_command_takeover.py \
+    tests/test_g1_sonic_zero_command_takeover.py > "${compile_log}" 2>&1
+  compile_status=$?
+  if [[ ${compile_status} -eq 0 ]]; then
+    "${python_bin}" -m json.tool \
+      configs/g1_sonic_zero_command_takeover_policy.json \
+      >> "${compile_log}" 2>&1
+    compile_status=$?
+  fi
+
 elif [[ "${contract}" == *"tests/test_g1_sonic_physical_readiness.py"* \
    && "${contract}" == *"services/g1_telemetry/sonic_physical_readiness.py"* \
    && "${contract}" == *"scripts/collect_g1_sonic_physical_readiness.py"* \

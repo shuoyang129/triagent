@@ -271,6 +271,18 @@ def test_codex_adapter_has_exact_m16_verification_scope() -> None:
     assert "tests/test_g1_isaac_posture_safety.py" in text
 
 
+def test_codex_adapter_has_exact_m38_zero_command_takeover_scope() -> None:
+    text = CODEX_ADAPTER.read_text(encoding="utf-8")
+    assert "m38-zero-command-takeover-focused" in text
+    assert "tests/test_g1_sonic_zero_command_takeover.py" in text
+    assert "tests/test_g1_sonic_physical_readiness.py" in text
+    assert "tests/test_g1_physical_hold_rehearsal.py" in text
+    assert "services/g1_telemetry/sonic_zero_command_takeover.py" in text
+    assert "scripts/evaluate_g1_sonic_zero_command_takeover.py" in text
+    assert "configs/g1_sonic_zero_command_takeover_policy.json" in text
+    assert '"${python_bin}" -m json.tool' in text
+
+
 def test_agy_adapter_propagates_safe_auth_marker(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
