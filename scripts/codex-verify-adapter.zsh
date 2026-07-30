@@ -28,7 +28,25 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 
 set +e
 artifact_status="not-requested"
-if [[ "${contract}" == *"tests/test_g1_sonic_isaac_runtime.py"* \
+if [[ "${contract}" == *"tests/test_g1_sonic_onnx_bridge.py"* \
+   && "${contract}" == *"services/g1_telemetry/sonic_onnx_bridge.py"* \
+   && "${contract}" == *"tools/sonic_onnx_stream.cpp"* ]]; then
+  test_scope="m36-core-focused"
+  "${python_bin}" -m pytest -q \
+    tests/test_g1_sonic_onnx_bridge.py > "${test_log}" 2>&1
+  test_status=$?
+  "${python_bin}" -m py_compile \
+    services/g1_telemetry/sonic_onnx_bridge.py \
+    tests/test_g1_sonic_onnx_bridge.py > "${compile_log}" 2>&1
+  compile_status=$?
+  if [[ ${compile_status} -eq 0 ]]; then
+    g++ -std=c++17 -Wall -Wextra -Werror -fsyntax-only \
+      -I /home/ys/projects/sonic-g1-official/GR00T-WholeBodyControl/deps/onnxruntime/include \
+      tools/sonic_onnx_stream.cpp >> "${compile_log}" 2>&1
+    compile_status=$?
+  fi
+
+elif [[ "${contract}" == *"tests/test_g1_sonic_isaac_runtime.py"* \
    && "${contract}" == *"services/g1_telemetry/sonic_isaac_runtime.py"* \
    && "${contract}" == *"scripts/run_m36_isaac_sonic_runtime.py"* \
    && "${contract}" == *"tools/sonic_onnx_stream.cpp"* ]]; then

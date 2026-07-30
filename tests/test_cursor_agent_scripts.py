@@ -139,6 +139,11 @@ print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":
 
 def test_codex_adapter_has_exact_m16_verification_scope() -> None:
     text = CODEX_ADAPTER.read_text(encoding="utf-8")
+    assert "m36-core-focused" in text
+    assert "tests/test_g1_sonic_onnx_bridge.py" in text
+    assert "services/g1_telemetry/sonic_onnx_bridge.py" in text
+    assert "tools/sonic_onnx_stream.cpp" in text
+    assert "g++ -std=c++17 -Wall -Wextra -Werror -fsyntax-only" in text
     assert "m36-focused" in text
     assert "tests/test_g1_sonic_isaac_runtime.py" in text
     assert "services/g1_telemetry/sonic_isaac_runtime.py" in text
