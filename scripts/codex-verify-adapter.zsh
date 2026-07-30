@@ -12,8 +12,9 @@ contract="$(<&0)"
 test_log="$(mktemp "${TMPDIR:-/tmp}/triagent-codex-tests.XXXXXX")"
 compile_log="$(mktemp "${TMPDIR:-/tmp}/triagent-codex-compile.XXXXXX")"
 diff_log="$(mktemp "${TMPDIR:-/tmp}/triagent-codex-diff.XXXXXX")"
+artifact_log="$(mktemp "${TMPDIR:-/tmp}/triagent-codex-artifact.XXXXXX")"
 cleanup() {
-  rm -f -- "${test_log}" "${compile_log}" "${diff_log}"
+  rm -f -- "${test_log}" "${compile_log}" "${diff_log}" "${artifact_log}"
   if [[ "${m32_materialized:-false}" == true || "${m33_materialized:-false}" == true ]]; then
     rm -rf -- ".physical_g1_runs"
   fi
@@ -26,7 +27,34 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="/usr/bin/python3"
 
 set +e
-if [[ "${contract}" == *"tests.test_g1_physical_single_writer_remediation"* \
+artifact_status="not-requested"
+if [[ "${contract}" == *"tests/test_g1_pc1_blackbox_boundary.py"* \
+   && "${contract}" == *"33287da3f641c53ae2e79ff56c34d96d9b1b64f58aeb5b24a416ddfc23c1d1e0"* ]]; then
+  test_scope="m34-focused-22"
+  "${python_bin}" -m pytest -q \
+    tests/test_g1_pc1_blackbox_boundary.py > "${test_log}" 2>&1
+  test_status=$?
+  if [[ ${test_status} -eq 0 ]] && ! grep -Fq "22 passed" "${test_log}"; then
+    test_status=1
+  fi
+  compile_status="not-requested"
+  expected_png_sha="33287da3f641c53ae2e79ff56c34d96d9b1b64f58aeb5b24a416ddfc23c1d1e0"
+  actual_png_sha="$(sha256sum docs/evidence/m34_pc1_blackbox_boundary.png 2>/dev/null | cut -d " " -f 1)"
+  png_description="$(file docs/evidence/m34_pc1_blackbox_boundary.png 2>/dev/null)"
+  if [[ "${actual_png_sha}" == "${expected_png_sha}" \
+     && "${png_description}" == *"PNG image data, 1200 x 760, 8-bit/color RGB, non-interlaced"* ]]; then
+    artifact_status=0
+  else
+    artifact_status=1
+  fi
+  {
+    print -r -- "M34_PNG_EXPECTED_SHA256=${expected_png_sha}"
+    print -r -- "M34_PNG_ACTUAL_SHA256=${actual_png_sha}"
+    print -r -- "M34_PNG_FILE=${png_description}"
+    print -r -- "VISUAL_SEMANTIC_REVIEW_DEFERRED_TO_REQUIRED_ANTIGRAVITY_STAGE=true"
+  } > "${artifact_log}"
+
+elif [[ "${contract}" == *"tests.test_g1_physical_single_writer_remediation"* \
    && "${contract}" == *"expected 265/265"* \
    && "${contract}" == *"expected 149/149"* ]]; then
   test_scope="m33-exact-36-265-149"
@@ -412,6 +440,10 @@ evidence+=$'\nPY_COMPILE_OUTPUT\n'
 evidence+="$(head -c 10000 "${compile_log}")"
 evidence+=$'\nDIFF_CHECK_OUTPUT\n'
 evidence+="$(head -c 10000 "${diff_log}")"
+evidence+=$'\nARTIFACT_VERIFICATION_STATUS='
+evidence+="${artifact_status}"
+evidence+=$'\nARTIFACT_VERIFICATION_OUTPUT\n'
+evidence+="$(head -c 10000 "${artifact_log}")"
 evidence+=$'\nCANDIDATE_DIFF\n'
 evidence+="$(git -c core.quotepath=false diff --no-ext-diff --text HEAD^ HEAD -- 2>/dev/null || true)"
 evidence="${evidence[1,90000]}"

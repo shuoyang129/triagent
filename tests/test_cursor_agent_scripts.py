@@ -139,6 +139,11 @@ print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":
 
 def test_codex_adapter_has_exact_m16_verification_scope() -> None:
     text = CODEX_ADAPTER.read_text(encoding="utf-8")
+    assert "m34-focused-22" in text
+    assert "tests/test_g1_pc1_blackbox_boundary.py" in text
+    assert "22 passed" in text
+    assert "M34_PNG_ACTUAL_SHA256" in text
+    assert "VISUAL_SEMANTIC_REVIEW_DEFERRED_TO_REQUIRED_ANTIGRAVITY_STAGE=true" in text
     assert "m33-exact-36-265-149" in text
     assert "tests.test_g1_physical_single_writer_remediation" in text
     assert "expected 265/265" in text
