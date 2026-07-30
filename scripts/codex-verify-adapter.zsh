@@ -28,6 +28,7 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 
 set +e
 artifact_status="not-requested"
+cpp_syntax_status="not-requested"
 if [[ "${contract}" == *"tests/test_g1_sonic_onnx_bridge.py"* \
    && "${contract}" == *"services/g1_telemetry/sonic_onnx_bridge.py"* \
    && "${contract}" == *"tools/sonic_onnx_stream.cpp"* ]]; then
@@ -43,7 +44,8 @@ if [[ "${contract}" == *"tests/test_g1_sonic_onnx_bridge.py"* \
     g++ -std=c++17 -Wall -Wextra -Werror -fsyntax-only \
       -I /home/ys/projects/sonic-g1-official/GR00T-WholeBodyControl/deps/onnxruntime/include \
       tools/sonic_onnx_stream.cpp >> "${compile_log}" 2>&1
-    compile_status=$?
+    cpp_syntax_status=$?
+    [[ ${cpp_syntax_status} -eq 0 ]] || compile_status=${cpp_syntax_status}
   fi
 
 elif [[ "${contract}" == *"tests/test_g1_sonic_isaac_runtime.py"* \
@@ -495,6 +497,8 @@ evidence+=$'\n'
 evidence+="UNITTEST_EXIT_STATUS=${test_status}"
 evidence+=$'\nPY_COMPILE_EXIT_STATUS='
 evidence+="${compile_status}"
+evidence+=$'\nCPP_SYNTAX_EXIT_STATUS='
+evidence+="${cpp_syntax_status}"
 evidence+=$'\nGIT_DIFF_CHECK_EXIT_STATUS='
 evidence+="${diff_status}"
 evidence+=$'\nCANDIDATE_COMMIT_NONEMPTY='
