@@ -40,6 +40,55 @@ def test_happy_path_reaches_approval(tmp_path: Path) -> None:
     assert store.load(task.id).state is TaskState.APPROVAL
 
 
+def test_reviewer_unavailable_is_retried_once_without_user_resume(
+    tmp_path: Path,
+) -> None:
+    reviewer = FakeAgent([
+        AgentResult(status=AgentStatus.UNAVAILABLE, summary="transient"),
+        AgentResult(status=AgentStatus.SUCCEEDED, summary="clean"),
+    ])
+    orchestrator, store = make_orchestrator(tmp_path, reviewer)
+    task = store.create_task(make_spec())
+
+    assert orchestrator.run_until_blocked(task.id) is TaskState.APPROVAL
+    assert store.runtime(task.id).agent_calls == 4
+    assert store.recovery_checkpoint(task.id) is None
+    assert store.outcomes(task.id)["review"].status == "passed"
+
+
+def test_reviewer_second_unavailable_remains_recoverable(
+    tmp_path: Path,
+) -> None:
+    reviewer = FakeAgent([
+        AgentResult(status=AgentStatus.UNAVAILABLE, summary="first transient"),
+        AgentResult(status=AgentStatus.UNAVAILABLE, summary="still unavailable"),
+    ])
+    orchestrator, store = make_orchestrator(tmp_path, reviewer)
+    task = store.create_task(make_spec())
+
+    assert orchestrator.run_until_blocked(task.id) is TaskState.FAILED_RECOVERABLE
+    assert store.runtime(task.id).agent_calls == 4
+    checkpoint = store.recovery_checkpoint(task.id)
+    assert checkpoint is not None
+    assert checkpoint["stage"] == "review"
+    assert checkpoint["sequence"] == 1
+
+
+def test_reviewer_unavailable_retry_never_bypasses_call_budget(
+    tmp_path: Path,
+) -> None:
+    reviewer = FakeAgent([
+        AgentResult(status=AgentStatus.UNAVAILABLE, summary="transient"),
+        AgentResult(status=AgentStatus.SUCCEEDED, summary="clean"),
+    ])
+    orchestrator, store = make_orchestrator(tmp_path, reviewer)
+    task = store.create_task(make_spec(max_calls=3))
+
+    assert orchestrator.run_until_blocked(task.id) is TaskState.PAUSED_BUDGET
+    assert store.runtime(task.id).agent_calls == 3
+    assert store.recovery_checkpoint(task.id) is None
+
+
 def test_robot_task_waits_for_visual_confirmation(tmp_path: Path) -> None:
     orchestrator, store = make_orchestrator(tmp_path, FakeAgent.succeeding("clean"))
     task = store.create_task(make_spec(risk=RiskLevel.ROBOT_SAFETY))

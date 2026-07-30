@@ -139,7 +139,15 @@ class Orchestrator:
             timeout_seconds=timeout_seconds,
         )
 
-    def _call(self, task_id: str, state: TaskState, adapter: AgentAdapter, request: AgentRequest):
+    def _call(
+        self,
+        task_id: str,
+        state: TaskState,
+        adapter: AgentAdapter,
+        request: AgentRequest,
+        *,
+        allow_review_unavailable_retry: bool = True,
+    ):
         task = self.store.load(task_id)
         identity,roles=_contract(adapter)
         if request.role not in roles or request.agent_identity != identity:
@@ -176,6 +184,18 @@ class Orchestrator:
         except BudgetExceeded:
             self.store.finalize_overrun_and_pause(task_id,call_id,actual,state); return None
         if result.status is not AgentStatus.SUCCEEDED:
+            if (
+                allow_review_unavailable_retry
+                and request.role is AgentRole.REVIEWER
+                and result.status is AgentStatus.UNAVAILABLE
+            ):
+                return self._call(
+                    task_id,
+                    state,
+                    adapter,
+                    request,
+                    allow_review_unavailable_retry=False,
+                )
             if diagnostic == "transport-cleanup-failed":self.store.record_attention(task_id,diagnostic)
             self._record_transport_failure(task_id, request.role, diagnostic)
             self.store.transition_recoverable(
