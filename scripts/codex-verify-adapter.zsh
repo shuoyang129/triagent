@@ -86,11 +86,15 @@ elif [[ "${contract}" == *"tests/test_g1_sonic_isaac_runtime.py"* \
   actual_decision_sha="$(sha256sum "${m36_dir}/decision.json" 2>/dev/null | cut -d " " -f 1)"
   actual_png_sha="$(sha256sum docs/evidence/m36_sonic_isaac_runtime.png 2>/dev/null | cut -d " " -f 1)"
   png_description="$(file docs/evidence/m36_sonic_isaac_runtime.png 2>/dev/null)"
+  m36_repository_root="$("${python_bin}" -c \
+    'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["provenance"]["repository_root"])' \
+    "${m36_dir}/expiry.json" 2>/dev/null)"
+  m36_source_dir="${m36_repository_root}/docs/evidence/runtime/m36_sonic_isaac_actual_20260730_v4"
   m36_eval_dir="$(mktemp -d "${TMPDIR:-/tmp}/triagent-m36-eval.XXXXXX")"
-  "${python_bin}" scripts/evaluate_g1_sonic_isaac_runtime.py \
-    --expiry "${m36_dir}/expiry.json" \
-    --revoke "${m36_dir}/revoke.json" \
-    --aggregate "${m36_dir}/aggregate.json" \
+  "${python_bin}" "${m36_repository_root}/scripts/evaluate_g1_sonic_isaac_runtime.py" \
+    --expiry "${m36_source_dir}/expiry.json" \
+    --revoke "${m36_source_dir}/revoke.json" \
+    --aggregate "${m36_source_dir}/aggregate.json" \
     --output "${m36_eval_dir}/decision.json" > "${artifact_log}" 2>&1
   evaluator_status=$?
   replay_decision_sha="$(sha256sum "${m36_eval_dir}/decision.json" 2>/dev/null | cut -d " " -f 1)"
@@ -108,6 +112,7 @@ elif [[ "${contract}" == *"tests/test_g1_sonic_isaac_runtime.py"* \
   fi
   {
     print -r -- "M36_EVALUATOR_EXIT_STATUS=${evaluator_status}"
+    print -r -- "M36_EVALUATOR_REPOSITORY_ROOT=${m36_repository_root}"
     print -r -- "M36_EXPIRY_EXPECTED_SHA256=${expected_expiry_sha}"
     print -r -- "M36_EXPIRY_ACTUAL_SHA256=${actual_expiry_sha}"
     print -r -- "M36_REVOKE_EXPECTED_SHA256=${expected_revoke_sha}"
