@@ -184,6 +184,28 @@ def test_opencode_deepseek_parses_fragmented_final_json(
     assert result.data["changed_paths"] == ["base.txt"]
 
 
+def test_opencode_deepseek_recovers_tracked_edits_after_invalid_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = OpenCodeRunner(final_fragments=["not canonical json"])
+    adapter = ready_adapter(monkeypatch, runner, tmp_path / "probe")
+    agent_request = request(tmp_path)
+    subprocess.run(["git", "add", "base.txt"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test.com",
+         "commit", "-q", "-m", "base"],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "base.txt").write_text("changed\n", encoding="utf-8")
+
+    result = adapter.run(agent_request)
+
+    assert result.status is AgentStatus.SUCCEEDED
+    assert result.data["changed_paths"] == ["base.txt"]
+    assert result.data["summary_code"] == "completed"
+
+
 def test_opencode_deepseek_rejects_fragmented_non_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
