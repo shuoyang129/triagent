@@ -275,9 +275,12 @@ def test_codex_adapter_has_exact_m38_zero_command_takeover_scope() -> None:
     text = CODEX_ADAPTER.read_text(encoding="utf-8")
     assert "m38-zero-command-takeover-focused" in text
     assert "tests/test_g1_sonic_zero_command_takeover.py" in text
+    assert "tests/test_m38_zero_command_takeover_adapter.py" in text
     assert "tests/test_g1_sonic_physical_readiness.py" in text
     assert "tests/test_g1_physical_hold_rehearsal.py" in text
     assert "services/g1_telemetry/sonic_zero_command_takeover.py" in text
+    assert "scripts/m38_zero_command_takeover_adapter.py" in text
+    assert "scripts/collect_g1_sonic_zero_command_takeover.py" in text
     assert "scripts/evaluate_g1_sonic_zero_command_takeover.py" in text
     assert "configs/g1_sonic_zero_command_takeover_policy.json" in text
     assert '"${python_bin}" -m json.tool' in text
