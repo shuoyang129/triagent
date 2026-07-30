@@ -163,6 +163,28 @@ def test_opencode_deepseek_parses_json_event_and_uses_private_attachment(
     assert "secret-value" not in " ".join(argv)
 
 
+def test_opencode_deepseek_removes_unclaimed_generated_output_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class OutputFileRunner(OpenCodeRunner):
+        def run(self, argv, cwd, timeout, env, stdin=None):
+            result = super().run(argv, cwd, timeout, env, stdin)
+            if "run" in argv and "--file=" in argv[-1]:
+                (Path(cwd) / ".triagent-output.json").write_text(
+                    json.dumps(self.final),
+                    encoding="utf-8",
+                )
+            return result
+
+    runner = OutputFileRunner()
+    adapter = ready_adapter(monkeypatch, runner, tmp_path / "probe")
+
+    result = adapter.run(request(tmp_path))
+
+    assert result.status is AgentStatus.SUCCEEDED
+    assert not (tmp_path / ".triagent-output.json").exists()
+
+
 def test_opencode_deepseek_parses_fragmented_final_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

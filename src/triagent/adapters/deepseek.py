@@ -385,6 +385,9 @@ class DeepSeekAdapter(AgentAdapter):
             return error
         assert prompt is not None
         prompt_file: Path | None = None
+        output_file = request.workdir / ".triagent-output.json"
+        output_file_preexisting = output_file.exists() or output_file.is_symlink()
+        output_file_declared = False
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -424,6 +427,11 @@ class DeepSeekAdapter(AgentAdapter):
                 request.role,
                 _failure_diagnostic,
             )
+            changed_paths = result.data.get("changed_paths")
+            output_file_declared = (
+                isinstance(changed_paths, list)
+                and ".triagent-output.json" in changed_paths
+            )
             if result.status is not AgentStatus.INVALID_OUTPUT:
                 return result
             diff = subprocess.run(
@@ -458,5 +466,15 @@ class DeepSeekAdapter(AgentAdapter):
             if prompt_file is not None:
                 try:
                     prompt_file.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            if (
+                not output_file_preexisting
+                and not output_file_declared
+                and output_file.is_file()
+                and not output_file.is_symlink()
+            ):
+                try:
+                    output_file.unlink()
                 except OSError:
                     pass
