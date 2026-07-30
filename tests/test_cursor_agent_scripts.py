@@ -146,6 +146,8 @@ def test_codex_adapter_has_exact_m16_verification_scope() -> None:
     assert "scripts/evaluate_g1_sonic_writer_admission.py" in text
     assert "M35_PNG_EXPECTED_SHA256" in text
     assert "M35_DECISION_EXPECTED_SHA256" in text
+    assert "docs/evidence/m35_triagent_review_scope.md" in text
+    assert "6bf175704a096dad527522232311ad77d4c79b86" in text
     assert "m34-focused-22" in text
     assert "tests/test_g1_pc1_blackbox_boundary.py" in text
     assert "22 passed" in text

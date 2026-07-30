@@ -28,10 +28,12 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 
 set +e
 artifact_status="not-requested"
-if [[ "${contract}" == *"tests/test_g1_sonic_writer_admission.py"* \
-   && "${contract}" == *"services/g1_telemetry/sonic_writer_admission.py"* \
-   && "${contract}" == *"scripts/simulate_g1_sonic_writer_admission.py"* \
-   && "${contract}" == *"scripts/evaluate_g1_sonic_writer_admission.py"* ]]; then
+if [[ ( "${contract}" == *"tests/test_g1_sonic_writer_admission.py"* \
+      && "${contract}" == *"services/g1_telemetry/sonic_writer_admission.py"* \
+      && "${contract}" == *"scripts/simulate_g1_sonic_writer_admission.py"* \
+      && "${contract}" == *"scripts/evaluate_g1_sonic_writer_admission.py"* ) \
+   || ( "${contract}" == *"docs/evidence/m35_triagent_review_scope.md"* \
+      && "${contract}" == *"6bf175704a096dad527522232311ad77d4c79b86"* ) ]]; then
   test_scope="m35-focused"
   "${python_bin}" -m pytest -q \
     tests/test_g1_sonic_writer_admission.py > "${test_log}" 2>&1
