@@ -29,7 +29,18 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 set +e
 artifact_status="not-requested"
 cpp_syntax_status="not-requested"
-if [[ "${contract}" == *"tests/test_g1_sonic_onnx_bridge.py"* \
+if [[ "${contract}" == *"tests/test_g1_sonic_isaac_semantics.py"* \
+   && "${contract}" == *"services/g1_telemetry/sonic_isaac_semantics.py"* ]]; then
+  test_scope="m36-semantics-focused"
+  "${python_bin}" -m pytest -q \
+    tests/test_g1_sonic_isaac_semantics.py > "${test_log}" 2>&1
+  test_status=$?
+  "${python_bin}" -m py_compile \
+    services/g1_telemetry/sonic_isaac_semantics.py \
+    tests/test_g1_sonic_isaac_semantics.py > "${compile_log}" 2>&1
+  compile_status=$?
+
+elif [[ "${contract}" == *"tests/test_g1_sonic_onnx_bridge.py"* \
    && "${contract}" == *"services/g1_telemetry/sonic_onnx_bridge.py"* \
    && "${contract}" == *"tools/sonic_onnx_stream.cpp"* ]]; then
   test_scope="m36-core-focused"
