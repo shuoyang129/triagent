@@ -28,7 +28,22 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 
 set +e
 artifact_status="not-requested"
-if [[ "${contract}" == *"tests/test_g1_pc1_blackbox_boundary.py"* \
+if [[ "${contract}" == *"tests/test_g1_sonic_writer_admission.py"* \
+   && "${contract}" == *"services/g1_telemetry/sonic_writer_admission.py"* \
+   && "${contract}" == *"scripts/simulate_g1_sonic_writer_admission.py"* \
+   && "${contract}" == *"scripts/evaluate_g1_sonic_writer_admission.py"* ]]; then
+  test_scope="m35-focused"
+  "${python_bin}" -m pytest -q \
+    tests/test_g1_sonic_writer_admission.py > "${test_log}" 2>&1
+  test_status=$?
+  "${python_bin}" -m py_compile \
+    services/g1_telemetry/sonic_writer_admission.py \
+    scripts/simulate_g1_sonic_writer_admission.py \
+    scripts/evaluate_g1_sonic_writer_admission.py \
+    tests/test_g1_sonic_writer_admission.py > "${compile_log}" 2>&1
+  compile_status=$?
+
+elif [[ "${contract}" == *"tests/test_g1_pc1_blackbox_boundary.py"* \
    && "${contract}" == *"33287da3f641c53ae2e79ff56c34d96d9b1b64f58aeb5b24a416ddfc23c1d1e0"* ]]; then
   test_scope="m34-focused-22"
   "${python_bin}" -m pytest -q \
