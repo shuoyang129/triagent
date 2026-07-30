@@ -421,6 +421,7 @@ class DeepSeekAdapter(AgentAdapter):
                 self._env,
                 self._secrets,
                 request.role,
+                _failure_diagnostic,
             )
         except Exception:
             return AgentResult(

@@ -26,6 +26,7 @@ class OpenCodeRunner:
         final: dict | None = None,
         final_fragments: list[str] | None = None,
         smoke_error: ProcessResult | None = None,
+        run_error: ProcessResult | None = None,
     ) -> None:
         self.final = final or {
             "status": "passed",
@@ -35,6 +36,7 @@ class OpenCodeRunner:
         }
         self.final_fragments = final_fragments
         self.smoke_error = smoke_error
+        self.run_error = run_error
         self.calls: list[tuple[list[str], Path, float, dict[str, str], str | None]] = []
 
     def run(self, argv, cwd, timeout, env, stdin=None):
@@ -50,6 +52,8 @@ class OpenCodeRunner:
             nonce = argv[-1].split(" NONCE=", 1)[1]
             Path(path).write_text(nonce, encoding="utf-8")
             return completed('{"type":"text","part":{"type":"text","text":"ok"}}\n')
+        if self.run_error is not None:
+            return self.run_error
         fragments = self.final_fragments or [json.dumps(self.final)]
         events = [
             {
@@ -189,6 +193,22 @@ def test_opencode_deepseek_rejects_fragmented_non_json(
     result = adapter.run(request(tmp_path))
 
     assert result.status is AgentStatus.INVALID_OUTPUT
+
+
+def test_opencode_implementation_maps_only_safe_failure_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = "HTTP 429 rate limit provider-detail-must-not-persist"
+    runner = OpenCodeRunner(
+        run_error=completed(stderr=raw, returncode=1)
+    )
+    adapter = ready_adapter(monkeypatch, runner, tmp_path / "probe")
+
+    result = adapter.run(request(tmp_path))
+
+    assert result.status is AgentStatus.FAILED
+    assert result.data == {"diagnostic_code": "deepseek-rate-limited"}
+    assert raw not in result.model_dump_json()
 
 
 @pytest.mark.parametrize(

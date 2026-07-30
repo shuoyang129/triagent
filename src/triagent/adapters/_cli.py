@@ -7,12 +7,12 @@ import uuid
 import tempfile,shutil,subprocess,time,math
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from triagent.adapters.base import AgentResult, AgentStatus, AgentRole
 from pydantic import BaseModel,ConfigDict,Field,StrictStr,ValidationError
 from typing import Literal
-from triagent.adapters.process import ProcessRunner
+from triagent.adapters.process import ProcessResult, ProcessRunner
 
 REDACTED = "[REDACTED]"
 _SECRET_KEY = re.compile(r"(?:api[_-]?key|token|secret|password|authorization|credential)", re.IGNORECASE)
@@ -292,6 +292,7 @@ def invoke_opencode_jsonl(
     env: Mapping[str, str] | None = None,
     secret_values: Sequence[str] = (),
     role: AgentRole = AgentRole.IMPLEMENTER,
+    failure_diagnostic: Callable[[ProcessResult], str] | None = None,
 ) -> AgentResult:
     try:
         process = runner.run(argv, cwd, timeout, env or {})
@@ -307,7 +308,12 @@ def invoke_opencode_jsonl(
                 status=AgentStatus.UNAVAILABLE,
                 summary="OpenCode authentication or configuration is unavailable",
             )
-        return AgentResult(status=AgentStatus.FAILED, summary="OpenCode execution failed")
+        safe_code = failure_diagnostic(process) if failure_diagnostic else None
+        return AgentResult(
+            status=AgentStatus.FAILED,
+            summary="OpenCode execution failed",
+            data={"diagnostic_code": safe_code} if safe_code else {},
+        )
     messages: list[str] = []
     try:
         for line in process.stdout.splitlines():
@@ -317,7 +323,12 @@ def invoke_opencode_jsonl(
             if not isinstance(event, dict):
                 raise ValueError
             if event.get("type") == "error":
-                return AgentResult(status=AgentStatus.FAILED, summary="OpenCode execution failed")
+                safe_code = failure_diagnostic(process) if failure_diagnostic else None
+                return AgentResult(
+                    status=AgentStatus.FAILED,
+                    summary="OpenCode execution failed",
+                    data={"diagnostic_code": safe_code} if safe_code else {},
+                )
             part = event.get("part")
             if (
                 event.get("type") == "text"
