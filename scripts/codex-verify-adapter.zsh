@@ -28,7 +28,22 @@ python_bin="/home/ys/miniforge3/envs/triagent/bin/python"
 
 set +e
 artifact_status="not-requested"
-if [[ ( "${contract}" == *"tests/test_g1_sonic_writer_admission.py"* \
+if [[ "${contract}" == *"tests/test_g1_sonic_isaac_runtime.py"* \
+   && "${contract}" == *"services/g1_telemetry/sonic_isaac_runtime.py"* \
+   && "${contract}" == *"scripts/run_m36_isaac_sonic_runtime.py"* \
+   && "${contract}" == *"tools/sonic_onnx_stream.cpp"* ]]; then
+  test_scope="m36-focused"
+  "${python_bin}" -m pytest -q \
+    tests/test_g1_sonic_isaac_runtime.py > "${test_log}" 2>&1
+  test_status=$?
+  "${python_bin}" -m py_compile \
+    services/g1_telemetry/sonic_isaac_runtime.py \
+    scripts/run_m36_isaac_sonic_runtime.py \
+    scripts/evaluate_g1_sonic_isaac_runtime.py \
+    tests/test_g1_sonic_isaac_runtime.py > "${compile_log}" 2>&1
+  compile_status=$?
+
+elif [[ ( "${contract}" == *"tests/test_g1_sonic_writer_admission.py"* \
       && "${contract}" == *"services/g1_telemetry/sonic_writer_admission.py"* \
       && "${contract}" == *"scripts/simulate_g1_sonic_writer_admission.py"* \
       && "${contract}" == *"scripts/evaluate_g1_sonic_writer_admission.py"* ) \
