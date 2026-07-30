@@ -419,6 +419,7 @@ fi
 
 evidence=$'\n\nTRIAGENT_EMBEDDED_VERIFICATION_EVIDENCE_V1\n'
 evidence+=$'VERIFICATION_EXECUTION_RULE: Do not invoke tools or request permissions. Verify only the independently collected evidence below and return exactly the required JSON object.\n'
+evidence+=$'VERIFIER_ROLE_BOUNDARY: When visual_check is required, semantic image inspection belongs exclusively to the later independent reviewer stage. The verifier must validate artifact integrity and must not fail solely because that later visual review is pending.\n'
 evidence+="UNITTEST_COMMAND_SCOPE=${test_scope}"
 evidence+=$'\n'
 evidence+="UNITTEST_EXIT_STATUS=${test_status}"
