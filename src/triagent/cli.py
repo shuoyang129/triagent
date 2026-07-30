@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import math
 import hashlib
 import json
@@ -314,8 +315,27 @@ def resume(
 
 @app.command()
 def status(task_id: str, data_root: DataRoot = None) -> None:
-    task = TaskStore(_root(data_root)).load(task_id)
-    typer.echo(f"Task: {task.id}\nState: {task.state.value}")
+    store = TaskStore(_root(data_root))
+    task = store.load(task_id)
+    lines = [f"Task: {task.id}", f"State: {task.state.value}"]
+    if task.state is TaskState.FAILED_RECOVERABLE:
+        checkpoint = store.recovery_checkpoint(task_id)
+        if checkpoint is not None:
+            stage = checkpoint.get("stage")
+            sequence = checkpoint.get("sequence")
+            outcome = store.outcomes(task_id).get(str(stage))
+            diagnostic = outcome.diagnostic if outcome is not None else None
+            if (
+                stage in {"implement", "verify", "review"}
+                and isinstance(sequence, int)
+                and sequence >= 1
+                and isinstance(diagnostic, str)
+                and re.fullmatch(r"[a-z0-9-]{1,100}", diagnostic)
+            ):
+                lines.append(
+                    f"Recovery: stage={stage} sequence={sequence} diagnostic={diagnostic}"
+                )
+    typer.echo("\n".join(lines))
 
 
 @app.command()

@@ -647,6 +647,42 @@ def test_create_status_approve_report_and_doctor_are_operator_readable(tmp_path:
     assert doctor.exit_code == 0 and "fake: ready" in doctor.output.lower()
 
 
+def test_status_exposes_only_tokenized_recovery_diagnostic(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    store = TaskStore(data)
+    task = store.create_task(TaskSpec(
+        goal="goal", scope=[str(tmp_path)], acceptance=["tests pass"]
+    ))
+    store.record_outcome(task.id, StageOutcome(
+        stage="implement", status="failed", summary="requires-repair",
+        diagnostic="deepseek-api-failed",
+    ))
+    store.transition_recoverable(
+        task.id, TaskState.SPEC, "implement", "deepseek-api-failed"
+    )
+
+    result = runner.invoke(
+        app, ["status", "--data-root", str(data), task.id]
+    )
+
+    assert result.exit_code == 0
+    assert "State: FAILED_RECOVERABLE" in result.output
+    assert (
+        "Recovery: stage=implement sequence=1 diagnostic=deepseek-api-failed"
+        in result.output
+    )
+
+    store.record_outcome(task.id, StageOutcome(
+        stage="implement", status="failed", summary="requires-repair",
+        diagnostic="provider raw detail must stay hidden",
+    ))
+    hidden = runner.invoke(
+        app, ["status", "--data-root", str(data), task.id]
+    )
+    assert "provider raw detail" not in hidden.output
+    assert "Recovery:" not in hidden.output
+
+
 def test_doctor_profile_lists_safe_vendor_capability_summaries(monkeypatch, tmp_path: Path) -> None:
     profile = tmp_path / "profile.toml"
     profile.write_text(
