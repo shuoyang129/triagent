@@ -273,6 +273,12 @@ def test_codex_adapter_has_exact_m16_verification_scope() -> None:
 
 def test_codex_adapter_has_exact_m38_zero_command_takeover_scope() -> None:
     text = CODEX_ADAPTER.read_text(encoding="utf-8")
+    route_condition = text.split(
+        'elif [[ "${contract}" == *"tests/test_g1_sonic_zero_command_takeover.py"*',
+        1,
+    )[1].split('then', 1)[0]
+    assert "scripts/evaluate_g1_sonic_zero_command_takeover.py" not in route_condition
+    assert "configs/g1_sonic_zero_command_takeover_policy.json" not in route_condition
     assert "m38-zero-command-takeover-focused" in text
     assert "tests/test_g1_sonic_zero_command_takeover.py" in text
     assert "tests/test_m38_zero_command_takeover_adapter.py" in text

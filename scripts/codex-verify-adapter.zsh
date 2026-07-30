@@ -132,9 +132,7 @@ elif [[ "${contract}" == *"tests/test_g1_sonic_zero_command_takeover.py"* \
    && "${contract}" == *"tests/test_m38_zero_command_takeover_adapter.py"* \
    && "${contract}" == *"services/g1_telemetry/sonic_zero_command_takeover.py"* \
    && "${contract}" == *"scripts/m38_zero_command_takeover_adapter.py"* \
-   && "${contract}" == *"scripts/collect_g1_sonic_zero_command_takeover.py"* \
-   && "${contract}" == *"scripts/evaluate_g1_sonic_zero_command_takeover.py"* \
-   && "${contract}" == *"configs/g1_sonic_zero_command_takeover_policy.json"* ]]; then
+   && "${contract}" == *"scripts/collect_g1_sonic_zero_command_takeover.py"* ]]; then
   test_scope="m38-zero-command-takeover-focused"
   "${python_bin}" -m pytest -q \
     tests/test_g1_sonic_zero_command_takeover.py \
