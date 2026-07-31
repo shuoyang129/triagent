@@ -16,6 +16,7 @@ artifact_log="$(mktemp "${TMPDIR:-/tmp}/triagent-codex-artifact.XXXXXX")"
 cleanup() {
   rm -f -- "${test_log}" "${compile_log}" "${diff_log}" "${artifact_log}"
   [[ -n "${m36_eval_dir:-}" ]] && rm -rf -- "${m36_eval_dir}"
+  [[ -n "${m39_eval_dir:-}" ]] && rm -rf -- "${m39_eval_dir}"
   if [[ "${m32_materialized:-false}" == true || "${m33_materialized:-false}" == true ]]; then
     rm -rf -- ".physical_g1_runs"
   fi
@@ -127,6 +128,72 @@ elif [[ "${contract}" == *"tests/test_g1_sonic_isaac_runtime.py"* \
     print -r -- "M36_PNG_ACTUAL_SHA256=${actual_png_sha}"
     print -r -- "M36_PNG_FILE=${png_description}"
     print -r -- "VISUAL_SEMANTIC_REVIEW_DEFERRED_TO_REQUIRED_ANTIGRAVITY_STAGE=true"
+  } >> "${artifact_log}"
+
+elif [[ "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
+   && "${contract}" == *"tests/test_m39_minimal_motion_adapter.py"* \
+   && "${contract}" == *"services/g1_telemetry/sonic_minimal_motion.py"* \
+   && "${contract}" == *"scripts/materialize_m39_sonic_artifact.py"* \
+   && "${contract}" == *"scripts/m39_minimal_motion_adapter.py"* \
+   && "${contract}" == *"scripts/collect_g1_sonic_minimal_motion.py"* ]]; then
+  test_scope="m39-exact-83-277-15"
+  test_status=0
+  "${python_bin}" -m pytest -q \
+    tests/test_g1_sonic_minimal_motion.py \
+    tests/test_m39_minimal_motion_adapter.py > "${test_log}" 2>&1
+  [[ $? -eq 0 ]] || test_status=1
+  if ! grep -Fq "83 passed" "${test_log}"; then
+    test_status=1
+  fi
+  "${python_bin}" -m pytest -q \
+    tests/test_g1_physical_hold_rehearsal.py \
+    tests/test_g1_sonic_zero_command_takeover.py \
+    tests/test_m38_zero_command_takeover_adapter.py \
+    tests/test_g1_sonic_minimal_motion.py \
+    tests/test_m39_minimal_motion_adapter.py >> "${test_log}" 2>&1
+  [[ $? -eq 0 ]] || test_status=1
+  if ! grep -Fq "277 passed, 18 subtests passed" "${test_log}"; then
+    test_status=1
+  fi
+  "${python_bin}" -m pytest -q \
+    tests/test_repository_policy.py >> "${test_log}" 2>&1
+  [[ $? -eq 0 ]] || test_status=1
+  if ! grep -Fq "15 passed" "${test_log}"; then
+    test_status=1
+  fi
+  "${python_bin}" -m py_compile \
+    services/g1_telemetry/sonic_minimal_motion.py \
+    scripts/materialize_m39_sonic_artifact.py \
+    scripts/evaluate_g1_sonic_minimal_motion.py \
+    scripts/m39_minimal_motion_adapter.py \
+    scripts/collect_g1_sonic_minimal_motion.py \
+    tests/test_g1_sonic_minimal_motion.py \
+    tests/test_m39_minimal_motion_adapter.py > "${compile_log}" 2>&1
+  compile_status=$?
+  if [[ ${compile_status} -eq 0 ]]; then
+    "${python_bin}" -m json.tool \
+      configs/g1_sonic_minimal_motion_policy.json \
+      > "${artifact_log}" 2>&1
+    policy_json_status=$?
+    [[ ${policy_json_status} -eq 0 ]] || compile_status=${policy_json_status}
+  fi
+  m39_eval_dir="$(mktemp -d "${TMPDIR:-/tmp}/triagent-m39-eval.XXXXXX")"
+  "${python_bin}" scripts/materialize_m39_sonic_artifact.py \
+    --output "${m39_eval_dir}/sonic-artifact.json" >> "${artifact_log}" 2>&1
+  materializer_status=$?
+  if [[ ${materializer_status} -eq 0 ]]; then
+    "${python_bin}" -c \
+      "import json,sys; x=json.load(open(sys.argv[1], encoding=\"utf-8\")); assert x[\"source_evidence_canonical_sha256\"] == \"dd888cfb4216067a7b24bff1f9ba01909b7335c821b94112d384fb77ba897d69\"; assert x[\"action_vector_float32_sha256\"] == \"4083b391964332e77b63306d4f2672bbba23436f3defb681cb22e75246564213\"" \
+      "${m39_eval_dir}/sonic-artifact.json" >> "${artifact_log}" 2>&1
+    artifact_status=$?
+  else
+    artifact_status=${materializer_status}
+  fi
+  {
+    print -r -- "M39_MATERIALIZER_EXIT_STATUS=${materializer_status}"
+    print -r -- "M39_EXACT_FOCUSED_EXPECTED=83 passed"
+    print -r -- "M39_EXACT_PROTECTION_EXPECTED=277 passed, 18 subtests passed"
+    print -r -- "M39_EXACT_POLICY_EXPECTED=15 passed"
   } >> "${artifact_log}"
 
 elif [[ "${contract}" == *"tests/test_g1_sonic_zero_command_takeover.py"* \

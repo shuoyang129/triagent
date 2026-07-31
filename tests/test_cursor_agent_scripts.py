@@ -299,6 +299,51 @@ def test_codex_adapter_has_exact_m38_zero_command_takeover_scope() -> None:
     assert "POLICY_JSON_EXIT_STATUS=" in text
 
 
+def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
+    text = CODEX_ADAPTER.read_text(encoding="utf-8")
+    route_start = (
+        'elif [[ "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"*'
+    )
+    route_condition = text.split(route_start, 1)[1].split("then", 1)[0]
+    for required in (
+        "tests/test_m39_minimal_motion_adapter.py",
+        "services/g1_telemetry/sonic_minimal_motion.py",
+        "scripts/materialize_m39_sonic_artifact.py",
+        "scripts/m39_minimal_motion_adapter.py",
+        "scripts/collect_g1_sonic_minimal_motion.py",
+    ):
+        assert required in route_condition
+
+    m39_body = text.split('test_scope="m39-exact-83-277-15"', 1)[1].split(
+        'elif [[ "${contract}" == *"tests/test_g1_sonic_zero_command_takeover.py"*',
+        1,
+    )[0]
+    for required in (
+        "tests/test_g1_sonic_minimal_motion.py",
+        "tests/test_m39_minimal_motion_adapter.py",
+        "tests/test_g1_physical_hold_rehearsal.py",
+        "tests/test_g1_sonic_zero_command_takeover.py",
+        "tests/test_m38_zero_command_takeover_adapter.py",
+        "tests/test_repository_policy.py",
+        "services/g1_telemetry/sonic_minimal_motion.py",
+        "scripts/materialize_m39_sonic_artifact.py",
+        "scripts/evaluate_g1_sonic_minimal_motion.py",
+        "scripts/m39_minimal_motion_adapter.py",
+        "scripts/collect_g1_sonic_minimal_motion.py",
+        "configs/g1_sonic_minimal_motion_policy.json",
+        "83 passed",
+        "277 passed, 18 subtests passed",
+        "15 passed",
+        "dd888cfb4216067a7b24bff1f9ba01909b7335c821b94112d384fb77ba897d69",
+        "4083b391964332e77b63306d4f2672bbba23436f3defb681cb22e75246564213",
+        "M39_MATERIALIZER_EXIT_STATUS=",
+    ):
+        assert required in m39_body
+    assert text.index(route_start) < text.index(
+        'elif [[ "${contract}" == *"tests/test_g1_sonic_zero_command_takeover.py"*'
+    )
+
+
 def test_agy_adapter_propagates_safe_auth_marker(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
