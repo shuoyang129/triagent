@@ -130,19 +130,22 @@ elif [[ "${contract}" == *"tests/test_g1_sonic_isaac_runtime.py"* \
     print -r -- "VISUAL_SEMANTIC_REVIEW_DEFERRED_TO_REQUIRED_ANTIGRAVITY_STAGE=true"
   } >> "${artifact_log}"
 
-elif [[ "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
+elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
    && "${contract}" == *"tests/test_m39_minimal_motion_adapter.py"* \
    && "${contract}" == *"services/g1_telemetry/sonic_minimal_motion.py"* \
    && "${contract}" == *"scripts/materialize_m39_sonic_artifact.py"* \
    && "${contract}" == *"scripts/m39_minimal_motion_adapter.py"* \
-   && "${contract}" == *"scripts/collect_g1_sonic_minimal_motion.py"* ]]; then
-  test_scope="m39-exact-83-277-15"
+   && "${contract}" == *"scripts/collect_g1_sonic_minimal_motion.py"* ) \
+   || ( "${contract}" == *"M39 physical G1 repair review"* \
+   && "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
+   && "${contract}" == *"tests/test_m39_minimal_motion_adapter.py"* ) ]]; then
+  test_scope="m39-exact-86-280-15"
   test_status=0
   "${python_bin}" -m pytest -q \
     tests/test_g1_sonic_minimal_motion.py \
     tests/test_m39_minimal_motion_adapter.py > "${test_log}" 2>&1
   [[ $? -eq 0 ]] || test_status=1
-  if ! grep -Fq "83 passed" "${test_log}"; then
+  if ! grep -Fq "86 passed" "${test_log}"; then
     test_status=1
   fi
   "${python_bin}" -m pytest -q \
@@ -152,7 +155,7 @@ elif [[ "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
     tests/test_g1_sonic_minimal_motion.py \
     tests/test_m39_minimal_motion_adapter.py >> "${test_log}" 2>&1
   [[ $? -eq 0 ]] || test_status=1
-  if ! grep -Fq "277 passed, 18 subtests passed" "${test_log}"; then
+  if ! grep -Fq "280 passed, 18 subtests passed" "${test_log}"; then
     test_status=1
   fi
   "${python_bin}" -m pytest -q \
@@ -204,8 +207,8 @@ elif [[ "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
     print -r -- "M39_PNG_EXPECTED_SHA256=${m39_png_expected_sha}"
     print -r -- "M39_PNG_ACTUAL_SHA256=${m39_png_actual_sha}"
     print -r -- "M39_PNG_FILE=${m39_png_description}"
-    print -r -- "M39_EXACT_FOCUSED_EXPECTED=83 passed"
-    print -r -- "M39_EXACT_PROTECTION_EXPECTED=277 passed, 18 subtests passed"
+    print -r -- "M39_EXACT_FOCUSED_EXPECTED=86 passed"
+    print -r -- "M39_EXACT_PROTECTION_EXPECTED=280 passed, 18 subtests passed"
     print -r -- "M39_EXACT_POLICY_EXPECTED=15 passed"
   } >> "${artifact_log}"
 

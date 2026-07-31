@@ -302,9 +302,10 @@ def test_codex_adapter_has_exact_m38_zero_command_takeover_scope() -> None:
 def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
     text = CODEX_ADAPTER.read_text(encoding="utf-8")
     route_start = (
-        'elif [[ "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"*'
+        'elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"*'
     )
     route_condition = text.split(route_start, 1)[1].split("then", 1)[0]
+    assert "M39 physical G1 repair review" in route_condition
     for required in (
         "tests/test_m39_minimal_motion_adapter.py",
         "services/g1_telemetry/sonic_minimal_motion.py",
@@ -314,7 +315,7 @@ def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
     ):
         assert required in route_condition
 
-    m39_body = text.split('test_scope="m39-exact-83-277-15"', 1)[1].split(
+    m39_body = text.split('test_scope="m39-exact-86-280-15"', 1)[1].split(
         'elif [[ "${contract}" == *"tests/test_g1_sonic_zero_command_takeover.py"*',
         1,
     )[0]
@@ -331,8 +332,8 @@ def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
         "scripts/m39_minimal_motion_adapter.py",
         "scripts/collect_g1_sonic_minimal_motion.py",
         "configs/g1_sonic_minimal_motion_policy.json",
-        "83 passed",
-        "277 passed, 18 subtests passed",
+        "86 passed",
+        "280 passed, 18 subtests passed",
         "15 passed",
         "dd888cfb4216067a7b24bff1f9ba01909b7335c821b94112d384fb77ba897d69",
         "4083b391964332e77b63306d4f2672bbba23436f3defb681cb22e75246564213",
