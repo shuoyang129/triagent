@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import stat
 import subprocess
 import tempfile
 import time
@@ -13,7 +14,15 @@ from typing import Literal
 
 from pydantic import ConfigDict
 
-from triagent.adapters._cli import invoke_opencode_jsonl, probe, read_prompt, runtime
+from triagent.adapters._cli import (
+    _canonical,
+    _decode_json_object,
+    invoke_opencode_jsonl,
+    probe,
+    read_prompt,
+    runtime,
+    sanitize,
+)
 from triagent.adapters.base import (
     AgentAdapter,
     AgentCapabilities,
@@ -36,6 +45,9 @@ _ALLOWED_MODELS = frozenset(
 )
 _MIN_SMOKE_TIMEOUT_SECONDS = 1
 _MAX_SMOKE_TIMEOUT_SECONDS = 300
+
+_MAX_CANONICAL_OUTPUT_BYTES = 1_000_000
+
 
 DeepSeekDiagnostic = Literal[
     "deepseek-disabled",
@@ -150,6 +162,52 @@ def _failure_diagnostic(process: ProcessResult) -> DeepSeekDiagnostic:
     if any(marker in text for marker in ("invalid request", "bad request", "model not found")):
         return "deepseek-request-invalid"
     return "deepseek-api-failed"
+
+
+def _read_private_canonical_output(
+    path: Path,
+    role: AgentRole,
+    secrets: Sequence[str],
+) -> AgentResult | None:
+    try:
+        metadata = path.lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_mode & 0o077
+            or metadata.st_size <= 0
+            or metadata.st_size > _MAX_CANONICAL_OUTPUT_BYTES
+        ):
+            return None
+        payload, diagnostic = _decode_json_object(path.read_text(encoding="utf-8"))
+        if diagnostic is not None or payload is None:
+            return None
+        payload = sanitize(payload, secrets)
+        if not isinstance(payload, dict):
+            return None
+        data = _canonical(role, payload)
+        changed_paths = data.get("changed_paths", [])
+        if any(
+            Path(item).name.startswith(".triagent-opencode-output-")
+            for item in changed_paths
+        ):
+            return None
+        actual = payload.get("actual_usd")
+        if (
+            not isinstance(actual, (int, float))
+            or isinstance(actual, bool)
+            or not math.isfinite(actual)
+        ):
+            actual = None
+        return AgentResult(
+            status=AgentStatus.SUCCEEDED,
+            data=data,
+            stdout="",
+            stderr="",
+            actual_usd=actual,
+        )
+    except (OSError, UnicodeError, ValueError):
+        return None
 
 
 class DeepSeekAdapter(AgentAdapter):
@@ -385,9 +443,12 @@ class DeepSeekAdapter(AgentAdapter):
             return error
         assert prompt is not None
         prompt_file: Path | None = None
-        output_file = request.workdir / ".triagent-output.json"
-        output_file_preexisting = output_file.exists() or output_file.is_symlink()
-        output_file_declared = False
+        transport_file: Path | None = None
+        legacy_output_file = request.workdir / ".triagent-output.json"
+        legacy_output_file_preexisting = (
+            legacy_output_file.exists() or legacy_output_file.is_symlink()
+        )
+        legacy_output_file_declared = False
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -400,6 +461,16 @@ class DeepSeekAdapter(AgentAdapter):
                 handle.write(prompt)
                 prompt_file = Path(handle.name)
             prompt_file.chmod(0o600)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=request.workdir,
+                prefix=".triagent-opencode-output-",
+                suffix=".json",
+                delete=False,
+            ) as handle:
+                transport_file = Path(handle.name)
+            transport_file.chmod(0o600)
             result = invoke_opencode_jsonl(
                 self._runner,
                 [
@@ -416,7 +487,11 @@ class DeepSeekAdapter(AgentAdapter):
                     str(request.workdir),
                     (
                         "Implement the attached TriAgent controller task in the current "
-                        "workdir. Finish with exactly the required JSON object."
+                        "workdir. Write exactly the required JSON object to the private "
+                        "canonical output path using the edit tool, then return the same "
+                        "JSON object with no prose. Exclude the transport file from "
+                        "changed_paths. CANONICAL_OUTPUT_PATH_JSON="
+                        f"{json.dumps(str(transport_file))}"
                     ),
                     f"--file={prompt_file}",
                 ],
@@ -428,12 +503,20 @@ class DeepSeekAdapter(AgentAdapter):
                 _failure_diagnostic,
             )
             changed_paths = result.data.get("changed_paths")
-            output_file_declared = (
+            legacy_output_file_declared = (
                 isinstance(changed_paths, list)
                 and ".triagent-output.json" in changed_paths
             )
             if result.status is not AgentStatus.INVALID_OUTPUT:
                 return result
+            assert transport_file is not None
+            recovered = _read_private_canonical_output(
+                transport_file,
+                request.role,
+                self._secrets,
+            )
+            if recovered is not None:
+                return recovered
             diff = subprocess.run(
                 ["git", "diff", "--name-only", "--diff-filter=ACMRTUXB", "HEAD", "--"],
                 cwd=request.workdir,
@@ -463,18 +546,19 @@ class DeepSeekAdapter(AgentAdapter):
                 data={"diagnostic_code": "deepseek-api-failed"},
             )
         finally:
-            if prompt_file is not None:
-                try:
-                    prompt_file.unlink(missing_ok=True)
-                except OSError:
-                    pass
+            for private_file in (prompt_file, transport_file):
+                if private_file is not None:
+                    try:
+                        private_file.unlink(missing_ok=True)
+                    except OSError:
+                        pass
             if (
-                not output_file_preexisting
-                and not output_file_declared
-                and output_file.is_file()
-                and not output_file.is_symlink()
+                not legacy_output_file_preexisting
+                and not legacy_output_file_declared
+                and legacy_output_file.is_file()
+                and not legacy_output_file.is_symlink()
             ):
                 try:
-                    output_file.unlink()
+                    legacy_output_file.unlink()
                 except OSError:
                     pass

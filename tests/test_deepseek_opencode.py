@@ -206,6 +206,65 @@ def test_opencode_deepseek_parses_fragmented_final_json(
     assert result.data["changed_paths"] == ["base.txt"]
 
 
+class PrivateCanonicalOutputRunner(OpenCodeRunner):
+    def __init__(self, payload: dict, *, symlink: bool = False) -> None:
+        super().__init__(final_fragments=["not canonical json"])
+        self.payload = payload
+        self.symlink = symlink
+
+    def run(self, argv, cwd, timeout, env, stdin=None):
+        result = super().run(argv, cwd, timeout, env, stdin)
+        if "run" in argv and "--file=" in argv[-1]:
+            match = re.search(r"CANONICAL_OUTPUT_PATH_JSON=(\".*\")$", argv[-2])
+            assert match is not None
+            output = Path(json.loads(match.group(1)))
+            if self.symlink:
+                target = Path(cwd) / "attacker-output.json"
+                target.write_text(json.dumps(self.payload), encoding="utf-8")
+                output.unlink()
+                output.symlink_to(target)
+            else:
+                output.write_text(json.dumps(self.payload), encoding="utf-8")
+        return result
+
+
+def test_opencode_deepseek_recovers_private_canonical_output_when_stdout_is_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = {
+        "status": "passed",
+        "evidence": ["reviewed existing implementation"],
+        "artifacts": [],
+        "changed_paths": [],
+    }
+    runner = PrivateCanonicalOutputRunner(payload)
+    adapter = ready_adapter(monkeypatch, runner, tmp_path / "probe")
+
+    result = adapter.run(request(tmp_path))
+
+    assert result.status is AgentStatus.SUCCEEDED
+    assert result.data["changed_paths"] == []
+    assert not list(tmp_path.glob(".triagent-opencode-output-*.json"))
+
+
+def test_opencode_deepseek_rejects_symlinked_private_canonical_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = {
+        "status": "passed",
+        "evidence": ["must not be trusted"],
+        "artifacts": [],
+        "changed_paths": [],
+    }
+    runner = PrivateCanonicalOutputRunner(payload, symlink=True)
+    adapter = ready_adapter(monkeypatch, runner, tmp_path / "probe")
+
+    result = adapter.run(request(tmp_path))
+
+    assert result.status is AgentStatus.INVALID_OUTPUT
+    assert not list(tmp_path.glob(".triagent-opencode-output-*.json"))
+
+
 def test_opencode_deepseek_recovers_tracked_edits_after_invalid_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
