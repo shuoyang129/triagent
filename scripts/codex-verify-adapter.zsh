@@ -189,8 +189,21 @@ elif [[ "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
   else
     artifact_status=${materializer_status}
   fi
+  m39_png_path="docs/evidence/m39_sonic_minimal_motion_contract.png"
+  m39_png_expected_sha="2ff05bed7239b84ba34befa9af5e7cdae861f16ac07b78e90456261fbb0fd6c8"
+  m39_png_actual_sha="$(sha256sum "${m39_png_path}" 2>/dev/null | cut -d " " -f 1)"
+  m39_png_description="$(file "${m39_png_path}" 2>/dev/null)"
+  if [[ ${artifact_status} -ne 0 \
+     || "${m39_png_actual_sha}" != "${m39_png_expected_sha}" \
+     || "${m39_png_description}" != *"PNG image data, 1200 x 800, 8-bit/color RGB, non-interlaced"* ]]; then
+    artifact_status=1
+  fi
   {
     print -r -- "M39_MATERIALIZER_EXIT_STATUS=${materializer_status}"
+    print -r -- "M39_VISUAL_ARTIFACT_PATH=${m39_png_path}"
+    print -r -- "M39_PNG_EXPECTED_SHA256=${m39_png_expected_sha}"
+    print -r -- "M39_PNG_ACTUAL_SHA256=${m39_png_actual_sha}"
+    print -r -- "M39_PNG_FILE=${m39_png_description}"
     print -r -- "M39_EXACT_FOCUSED_EXPECTED=83 passed"
     print -r -- "M39_EXACT_PROTECTION_EXPECTED=277 passed, 18 subtests passed"
     print -r -- "M39_EXACT_POLICY_EXPECTED=15 passed"
