@@ -26,6 +26,14 @@ def test_default_matrix_has_every_provider_stage_size_cell_and_is_deterministic(
     assert len(selection.persistable()["digest"]) == 64
 
 
+def test_small_codex_verification_allows_bounded_initial_sandbox_response() -> None:
+    policy = default_v2_matrix().select(Provider.CODEX, Stage.VERIFY, TaskSize.SMALL).policy
+
+    assert policy.startup_timeout == 180
+    assert policy.idle_timeout == 180
+    assert policy.hard_timeout == 675
+
+
 def test_selection_is_strict_and_persistable_digest_changes_with_selector() -> None:
     matrix = default_v2_matrix()
 

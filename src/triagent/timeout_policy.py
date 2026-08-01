@@ -220,7 +220,9 @@ def default_v2_matrix() -> TimeoutMatrix:
         TaskSize.MEDIUM: (90, 300, 1800, 90, 30),
         TaskSize.LARGE: (120, 600, 3600, 120, 30),
     }
-    startup_extra = {Provider.CURSOR: 30, Provider.DEEPSEEK: 60, Provider.CODEX: 30, Provider.ANTIGRAVITY: 60, Provider.FAKE: 0}
+    # Codex may construct its read-only sandbox response before emitting its first JSON event.
+    # This preserves the meaningful-progress idle bound and hard ceiling.
+    startup_extra = {Provider.CURSOR: 30, Provider.DEEPSEEK: 60, Provider.CODEX: 120, Provider.ANTIGRAVITY: 60, Provider.FAKE: 0}
     stage_hard_factor = {Stage.READINESS: 0.5, Stage.IMPLEMENT: 1.0, Stage.VERIFY: 0.75, Stage.REVIEW: 0.75, Stage.REPAIR: 1.0}
     entries: dict[tuple[Provider, Stage, TaskSize], StreamTimeouts] = {}
     for provider in Provider:
