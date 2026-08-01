@@ -135,21 +135,23 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
    && "${contract}" == *"services/g1_telemetry/sonic_minimal_motion.py"* \
    && "${contract}" == *"scripts/materialize_m39_sonic_artifact.py"* \
    && "${contract}" == *"scripts/m39_minimal_motion_adapter.py"* \
+   && "${contract}" == *"scripts/m39_restore_mode_recovery.py"* \
    && "${contract}" == *"scripts/collect_g1_sonic_minimal_motion.py"* ) \
    || ( "${contract}" == *"M39 physical G1 repair review"* \
    && "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
    && "${contract}" == *"tests/test_m39_minimal_motion_adapter.py"* ) \
    || ( "${contract}" == *"M39 physical restore repair"* \
    && "${contract}" == *"scripts/m39_minimal_motion_adapter.py"* \
+   && "${contract}" == *"scripts/m39_restore_mode_recovery.py"* \
    && "${contract}" == *"tests/test_m39_minimal_motion_adapter.py"* ) \
    || "${contract}" == *"M39 physical restore repair final pre-active review"* ]]; then
-  test_scope="m39-exact-93-287-15"
+  test_scope="m39-exact-115-309-15"
   test_status=0
   "${python_bin}" -m pytest -q \
     tests/test_g1_sonic_minimal_motion.py \
     tests/test_m39_minimal_motion_adapter.py > "${test_log}" 2>&1
   [[ $? -eq 0 ]] || test_status=1
-  if ! grep -Fq "93 passed" "${test_log}"; then
+  if ! grep -Fq "115 passed" "${test_log}"; then
     test_status=1
   fi
   "${python_bin}" -m pytest -q \
@@ -159,7 +161,7 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
     tests/test_g1_sonic_minimal_motion.py \
     tests/test_m39_minimal_motion_adapter.py >> "${test_log}" 2>&1
   [[ $? -eq 0 ]] || test_status=1
-  if ! grep -Fq "287 passed, 18 subtests passed" "${test_log}"; then
+  if ! grep -Fq "309 passed, 18 subtests passed" "${test_log}"; then
     test_status=1
   fi
   "${python_bin}" -m pytest -q \
@@ -173,6 +175,7 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
     scripts/materialize_m39_sonic_artifact.py \
     scripts/evaluate_g1_sonic_minimal_motion.py \
     scripts/m39_minimal_motion_adapter.py \
+    scripts/m39_restore_mode_recovery.py \
     scripts/collect_g1_sonic_minimal_motion.py \
     tests/test_g1_sonic_minimal_motion.py \
     tests/test_m39_minimal_motion_adapter.py > "${compile_log}" 2>&1
@@ -211,8 +214,8 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
     print -r -- "M39_PNG_EXPECTED_SHA256=${m39_png_expected_sha}"
     print -r -- "M39_PNG_ACTUAL_SHA256=${m39_png_actual_sha}"
     print -r -- "M39_PNG_FILE=${m39_png_description}"
-    print -r -- "M39_EXACT_FOCUSED_EXPECTED=93 passed"
-    print -r -- "M39_EXACT_PROTECTION_EXPECTED=287 passed, 18 subtests passed"
+    print -r -- "M39_EXACT_FOCUSED_EXPECTED=115 passed"
+    print -r -- "M39_EXACT_PROTECTION_EXPECTED=309 passed, 18 subtests passed"
     print -r -- "M39_EXACT_POLICY_EXPECTED=15 passed"
   } >> "${artifact_log}"
 
