@@ -89,10 +89,15 @@ set +e
 # converted to a content-free controller marker immediately, so the v2 runner
 # can distinguish real provider activity from a wrapper liveness heartbeat.
 # Liveness itself is separate and never classifies as progress.
+last_provider_signal=-1
 {
   while IFS= read -r record || [[ -n "${record}" ]]; do
     print -r -- "${record}" >> "${stdout_file}"
-    print -r -- "TRIAGENT_AGY_PROVIDER_OUTPUT_V1"
+    # Coalesce genuine provider records without a timer-driven signal.
+    if (( SECONDS != last_provider_signal )); then
+      print -r -- "TRIAGENT_AGY_PROVIDER_OUTPUT_V1"
+      last_provider_signal=$SECONDS
+    fi
   done < "${stream_fifo}"
 } &
 stream_reader_pid=$!

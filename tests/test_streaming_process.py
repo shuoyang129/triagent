@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-from triagent.adapters.process import StreamEventKind, StreamPolicy, StreamingProcessRunner
+from triagent.adapters.process import StreamEventKind, StreamPolicy, StreamingProcessRunner, _StreamingRedactor
 
 
 def policy(**overrides: object) -> StreamPolicy:
@@ -96,3 +96,10 @@ def test_stream_policy_rejects_invalid_values() -> None:
         assert "positive" in str(error)
     else:
         raise AssertionError("invalid policy accepted")
+
+
+def test_streaming_redactor_without_secrets_flushes_each_chunk() -> None:
+    redactor = _StreamingRedactor(())
+
+    assert redactor.feed("first") == "first"
+    assert redactor.feed("second") == "second"

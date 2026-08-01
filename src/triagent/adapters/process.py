@@ -93,7 +93,10 @@ class _StreamingRedactor:
         self._pending += value
         if len(self._pending) <= self._hold:
             return ""
-        safe, self._pending = self._pending[:-self._hold], self._pending[-self._hold:]
+        if self._hold == 0:
+            safe, self._pending = self._pending, ""
+        else:
+            safe, self._pending = self._pending[:-self._hold], self._pending[-self._hold:]
         return self._redact(safe)
 
     def finish(self) -> str:

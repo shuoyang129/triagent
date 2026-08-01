@@ -130,7 +130,7 @@ def test_v2_agy_wrapper_emits_progress_only_for_provider_output_records(tmp_path
     marker = "TRIAGENT_AGY_PROVIDER_OUTPUT_V1"
     liveness = "TRIAGENT_AGY_LIVENESS_V1"
     assert result.returncode == 0, result.stderr
-    assert result.stdout.count(marker) == 2
+    assert result.stdout.count(marker) == 1
     assert result.stdout.count(liveness) >= 1
     assert "provider-status: reviewing" not in result.stdout
     canonical = [line for line in result.stdout.splitlines() if line not in {marker, liveness}]
