@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+import signal
 import re
 import math
 import hashlib
 import json
 import tomllib
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -60,6 +62,22 @@ def main(
     if version:
         typer.echo(f"triagent-v2 {__version__}")
         raise typer.Exit()
+
+
+
+@contextmanager
+def _recover_interruption():
+    """Convert supervisor SIGTERM into a recoverable controller exception."""
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def interrupted(_signum, _frame):
+        raise InterruptedError("controller interrupted")
+
+    signal.signal(signal.SIGTERM, interrupted)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def _root(value: Path | None, *, allow_initialize: bool = False) -> Path:
@@ -313,7 +331,8 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
                 store, cursor if choice.name == "cursor" else deepseek, codex, antigravity,
                 profile_digest=_profile_digest(config),
             )
-        state = orchestrator.run_until_blocked(task.id)
+        with _recover_interruption():
+            state = orchestrator.run_until_blocked(task.id)
     except Exception as error:
         preserved=[]
         if run_worktree.exists(): preserved.append(f"preserved worktree: {run_worktree}")
@@ -358,7 +377,8 @@ def inspect_read_only(
             AntigravityAdapter(command=_profile_command(config, "antigravity"), estimated_usd=_priced(config, "antigravity"), stream_v2=stream_v2["antigravity"], stream_policy=agy_policy),
             profile_digest=_profile_digest(config), source=repo, source_before=before,
         )
-        state = orchestrator.run_until_blocked(task.id)
+        with _recover_interruption():
+            state = orchestrator.run_until_blocked(task.id)
         orchestrator._assert_unchanged()
     except (OSError, tomllib.TOMLDecodeError, ValueError, RuntimeError, TypeError):
         raise typer.BadParameter("read-only inspection failed; inspect persisted task status") from None
@@ -431,7 +451,8 @@ def resume(
                 )
                 store.record_attestation(task_id, "live-confirmed", True)
                 store.record_attestation(task_id, "billing-confirmed", True)
-                state = orchestrator.resume_until_blocked(task_id)
+                with _recover_interruption():
+                    state = orchestrator.resume_until_blocked(task_id)
                 report_path = store.runs_root / task_id / "final-report.md"
                 report_path.write_text(render_persisted_report(store, task_id), encoding="utf-8")
                 typer.echo(f"Task: {task_id}\nState: {state.value}\nReport: {report_path}")
@@ -489,7 +510,8 @@ def resume(
             )
             store.record_attestation(task_id, "live-confirmed", True)
             store.record_attestation(task_id, "billing-confirmed", True)
-        state = orchestrator.resume_until_blocked(task_id)
+        with _recover_interruption():
+            state = orchestrator.resume_until_blocked(task_id)
     except (OSError, tomllib.TOMLDecodeError, KeyError, ValueError, RuntimeError):
         raise typer.BadParameter("task resume refused; inspect persisted task status") from None
     report_path = store.runs_root / task_id / "final-report.md"
