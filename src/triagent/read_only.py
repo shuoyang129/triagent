@@ -100,7 +100,10 @@ class ReadOnlyOrchestrator(Orchestrator):
             severities = {ReviewSeverity(item["severity"]) for item in result.data.get("findings", []) if isinstance(item, dict) and item.get("severity") in {x.value for x in ReviewSeverity}}
             if severities & {ReviewSeverity.BLOCKER, ReviewSeverity.MAJOR}:
                 self.store.record_outcome(task_id, self._outcome("review", result, status="failed"))
-                return self.store.transition(task_id, state, TaskState.FAILED_FINAL, "read-only-review-findings").state
+                # A completed inspection that identifies a blocking target risk is a
+                # successful fail-closed control outcome, not a transport failure.
+                # It never creates an approval or permits mutation.
+                return self.store.transition(task_id, state, TaskState.INSPECTION_HOLD, "read-only-target-admission-denied").state
             self.store.record_outcome(task_id, self._outcome("review", result))
             resource = {"mode": "read-only", **self.source_before, "canonical_diff_digest": hashlib.sha256(b"").hexdigest()}
             self.store.request_approval(task_id, "outcome", resource)
