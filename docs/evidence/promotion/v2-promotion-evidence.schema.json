@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://triagent.local/schemas/v2-promotion-evidence-1.json",
+  "title": "TriAgent v2 promotion evidence",
+  "description": "Offline, content-addressed gate evidence. Validation never performs a cutover.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "stage", "rollout_stage", "generated_at", "gates", "replays", "prior_stage_digests", "digest"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "stage": {"enum": ["unit-tests", "adapter-contracts", "fake-three-stage-workflow", "historical-replay", "isolated-no-provider-synthetic", "isolated-real-provider-synthetic", "low-risk-non-robot-project", "humanoid-offline-read-only", "ordinary-new-humanoid-task"]},
+    "rollout_stage": {"enum": ["A", "B", "C", "D"]},
+    "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "gates": {"type": "array", "items": {"$ref": "#/$defs/check"}},
+    "replays": {"type": "array", "items": {"$ref": "#/$defs/check"}},
+    "prior_stage_digests": {"type": "array", "items": {"$ref": "#/$defs/prior"}},
+    "operator_acceptance": {"$ref": "#/$defs/acceptance"},
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "check": {"type": "object", "additionalProperties": false, "required": ["id", "passed", "artifact_sha256"], "properties": {"id": {"type": "string"}, "passed": {"const": true}, "artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "note": {"type": "string", "maxLength": 512}}},
+    "prior": {"type": "object", "additionalProperties": false, "required": ["stage", "digest"], "properties": {"stage": {"type": "string"}, "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+    "acceptance": {"type": "object", "additionalProperties": false, "required": ["action", "outcome", "operator", "accepted_at"], "properties": {"action": {"const": "cutover"}, "outcome": {"const": "accepted"}, "operator": {"type": "string", "minLength": 1, "maxLength": 100}, "accepted_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"}}}
+  }
+}

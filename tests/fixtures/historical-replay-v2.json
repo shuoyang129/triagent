@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "suite": "triagent-v2-known-failure-replay",
+  "cases": [
+    {"id":"cursor-slow-status-probe","class":"slow Cursor version/status probe","nodeids":["tests/test_cli_capabilities.py::test_capability_probe_uses_30_second_timeout"]},
+    {"id":"cursor-filesystem-probe-bound","class":"Cursor filesystem probe at configured bound","nodeids":["tests/test_cursor_stream_v2.py::test_cursor_stream_v2_delayed_final_envelope_never_probes_or_leaks_vendor_text"]},
+    {"id":"agy-oauth-failure","class":"Antigravity OAuth failure","nodeids":["tests/test_antigravity_stream_v2.py::test_agy_stream_v2_oauth_unavailable_preserves_private_diagnostics"]},
+    {"id":"agy-mcp-stall","class":"Antigravity MCP stall with wrapper alive","nodeids":["tests/test_antigravity_stream_v2.py::test_agy_stream_v2_mcp_stall_and_empty_output_are_not_success"]},
+    {"id":"agy-delayed-exit","class":"Antigravity final output then delayed process exit","nodeids":["tests/test_antigravity_stream_v2.py::test_agy_stream_v2_preserves_ssh_context_and_detects_terminal_before_delayed_exit"]},
+    {"id":"agy-transient-retry","class":"one transient Antigravity unavailable followed by success","nodeids":["tests/test_orchestrator.py::test_reviewer_unavailable_is_retried_once_without_user_resume"]},
+    {"id":"opencode-fragmented-json","class":"fragmented OpenCode JSON output","nodeids":["tests/test_deepseek_stream_v2.py::test_stream_v2_handles_fragmented_structured_output_without_provider"]},
+    {"id":"deepseek-cleanup-invalid-output","class":"DeepSeek transport cleanup and invalid output after edits","nodeids":["tests/test_deepseek_stream_v2.py::test_stream_v2_invalid_output_recovers_tracked_edit_and_cleans_transport"]},
+    {"id":"codex-home-contamination","class":"CODEX_HOME environment contamination","nodeids":["tests/test_m9_hermetic_drift.py::test_suite_environment_is_hermetic_from_operator_configuration"]},
+    {"id":"provider-descendant-timeout","class":"provider descendant process after timeout","nodeids":["tests/test_streaming_process.py::test_streaming_runner_terminates_descendant_processes"]},
+    {"id":"controller-crash-durable-result","class":"controller crash after durable result creation","nodeids":["tests/test_completion_store_integration.py::test_crash_after_store_commit_replays_without_provider_or_duplicate_ledger"]},
+    {"id":"runtime-manifest-resume-drift","class":"runtime manifest drift on resume","nodeids":["tests/test_runtime_manifest_integration.py::test_fake_resume_rejects_runtime_drift_before_constructing_adapter"]}
+  ]
+}

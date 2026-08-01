@@ -117,6 +117,36 @@ def _agent_enabled(config: dict, name: str, *, default: bool) -> bool:
     return value
 
 
+def _profile_stream_v2_options(config: dict) -> dict[str, bool]:
+    """Return declared stream-v2 routes without constructing a provider.
+
+    A profile must explicitly identify itself as v2 before it can opt into a
+    stream transport.  This prevents a copied legacy profile from silently
+    changing execution semantics merely because a new field was added.
+    """
+    metadata = config.get("triagent", {})
+    if not isinstance(metadata, dict):
+        raise ValueError("invalid triagent profile metadata")
+    version = metadata.get("profile_version")
+    if version is not None and (not isinstance(version, int) or isinstance(version, bool)):
+        raise ValueError("invalid triagent profile version")
+    if version not in (None, 2):
+        raise ValueError("unsupported triagent profile version")
+    explicit_v2 = version == 2
+    flags: dict[str, bool] = {}
+    for name in ("cursor", "deepseek", "codex", "antigravity"):
+        section = config.get("agents", {}).get(name, {})
+        if not isinstance(section, dict):
+            raise ValueError(f"invalid {name} agent configuration")
+        enabled = section.get("stream_v2", False)
+        if not isinstance(enabled, bool):
+            raise ValueError(f"invalid {name} stream_v2 flag")
+        if enabled and not explicit_v2:
+            raise ValueError("stream_v2 requires an explicit triagent v2 profile")
+        flags[name] = enabled
+    return flags
+
+
 def _deepseek_options(config: dict) -> dict[str, object]:
     section = config.get("agents", {}).get("deepseek", {})
     model = section.get("model", "deepseek/deepseek-v4-pro")
@@ -212,6 +242,7 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
     try:
         if profile != "fake":
             config=tomllib.loads(Path(profile).read_text(encoding="utf-8"))
+            stream_v2 = _profile_stream_v2_options(config)
             values=config.get("budget",{})
             cursor_enabled=_agent_enabled(config, "cursor", default=True)
             budget=Budget(max_agent_calls=int(values.get("max_agent_calls",20)),max_minutes=int(values.get("max_minutes",60)),max_usd=float(values.get("max_usd",0)))
@@ -245,13 +276,13 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
             orchestrator = Orchestrator(store, FakeAgent([success]), FakeAgent([success]), FakeAgent([success]), profile_digest="fake-v1")
         else:
             assert config is not None
-            cursor = CursorAdapter(command=_profile_command(config, "cursor"), estimated_usd=_priced(config,"cursor"))
-            codex = CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config,"codex"))
-            antigravity = AntigravityAdapter(command=_profile_command(config, "antigravity"), estimated_usd=_priced(config,"antigravity"))
+            cursor = CursorAdapter(command=_profile_command(config, "cursor"), estimated_usd=_priced(config,"cursor"), stream_v2=stream_v2["cursor"])
+            codex = CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config,"codex"), stream_v2=stream_v2["codex"])
+            antigravity = AntigravityAdapter(command=_profile_command(config, "antigravity"), estimated_usd=_priced(config,"antigravity"), stream_v2=stream_v2["antigravity"])
             cursor_caps=cursor.capabilities() if cursor_enabled else False
             capabilities={"cursor":cursor_caps,"deepseek":False}
             if not bool(getattr(cursor_caps, "available", False)) and fallback_enabled:
-                deepseek=DeepSeekAdapter(enabled=True,billing_confirmed=billing_confirmed,live_confirmed=live_confirmed,estimated_usd=fallback_estimate,**_deepseek_options(config))
+                deepseek=DeepSeekAdapter(enabled=True,billing_confirmed=billing_confirmed,live_confirmed=live_confirmed,estimated_usd=fallback_estimate,stream_v2=stream_v2["deepseek"],**_deepseek_options(config))
                 deepseek_caps=store.execute_paid_operation(task.id,probe_cost,deepseek.capabilities)
                 capabilities["deepseek"]=deepseek_caps
                 if not deepseek_caps.available:
@@ -305,6 +336,7 @@ def resume(
             )
         else:
             config = tomllib.loads(Path(profile).read_text(encoding="utf-8"))
+            stream_v2 = _profile_stream_v2_options(config)
             digest = _profile_digest(config)
             persisted = store.execution_provenance(task_id)
             if persisted is None or persisted.get("mode") != "live":
@@ -322,6 +354,7 @@ def resume(
                 implementer = CursorAdapter(
                     command=_profile_command(config, "cursor"),
                     estimated_usd=_priced(config, "cursor"),
+                    stream_v2=stream_v2["cursor"],
                 )
             elif persisted["implementer"] == "deepseek":
                 fallback_name, fallback_enabled = _fallback_profile(config)
@@ -333,7 +366,7 @@ def resume(
                 implementer = DeepSeekAdapter(
                     enabled=True,
                     billing_confirmed=billing_confirmed, live_confirmed=live_confirmed,
-                    estimated_usd=fallback_estimate, **_deepseek_options(config),
+                    estimated_usd=fallback_estimate, stream_v2=stream_v2["deepseek"], **_deepseek_options(config),
                 )
                 probe_cost = None
                 if recovery_checkpoint[0] == "implement":
@@ -348,10 +381,12 @@ def resume(
                 CodexAdapter(
                     command=_profile_command(config, "codex"),
                     estimated_usd=_priced(config, "codex"),
+                    stream_v2=stream_v2["codex"],
                 ),
                 AntigravityAdapter(
                     command=_profile_command(config, "antigravity"),
                     estimated_usd=_priced(config, "antigravity"),
+                    stream_v2=stream_v2["antigravity"],
                 ),
                 profile_digest=digest,
                 expected_recovery_checkpoint=recovery_checkpoint,
@@ -445,17 +480,18 @@ def doctor(
     profile_path = Path(profile)
     try:
         config = tomllib.loads(profile_path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as error:
+        stream_v2 = _profile_stream_v2_options(config)
+    except (OSError, tomllib.TOMLDecodeError, ValueError) as error:
         raise typer.BadParameter("Cannot read selected profile") from error
 
     deepseek_enabled = bool(config.get("agents", {}).get("deepseek", {}).get("enabled", False))
     cursor_enabled = _agent_enabled(config, "cursor", default=True)
     probes = (
-        ("codex", CodexAdapter(command=_profile_command(config, "codex"))),
-        ("cursor", CursorAdapter(command=_profile_command(config, "cursor"))
+        ("codex", CodexAdapter(command=_profile_command(config, "codex"), stream_v2=stream_v2["codex"])),
+        ("cursor", CursorAdapter(command=_profile_command(config, "cursor"), stream_v2=stream_v2["cursor"])
          if cursor_enabled else None),
-        ("antigravity", AntigravityAdapter(command=_profile_command(config, "antigravity"))),
-        ("deepseek", DeepSeekAdapter(enabled=deepseek_enabled, billing_confirmed=False, **_deepseek_options(config))),
+        ("antigravity", AntigravityAdapter(command=_profile_command(config, "antigravity"), stream_v2=stream_v2["antigravity"])),
+        ("deepseek", DeepSeekAdapter(enabled=deepseek_enabled, billing_confirmed=False, stream_v2=stream_v2["deepseek"], **_deepseek_options(config))),
     )
     typer.echo(f"Profile: {profile_path}")
     for name, adapter in probes:
