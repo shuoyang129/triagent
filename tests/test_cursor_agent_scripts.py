@@ -92,9 +92,9 @@ def test_codex_adapter_embeds_controller_verification_evidence(tmp_path: Path) -
     tests = repo / "tests"
     tests.mkdir()
     (tests / "test_health.py").write_bytes(
-        b"import unittest\r\nfrom health import health_status\r\n"
-        b"class TestHealth(unittest.TestCase):\r\n"
-        b"    def test_ok(self): self.assertEqual(health_status(), 'ok')\r\n"
+        b"from health import health_status\r\n\r\n"
+        b"def test_ok():\r\n"
+        b"    assert health_status() == 'ok'\r\n"
     )
     subprocess.run(["git", "add", "health.py", "tests/test_health.py"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "candidate"], cwd=repo, check=True)
@@ -130,7 +130,8 @@ print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":
 
     assert result.returncode == 0, result.stderr
     prompt = prompt_log.read_text(encoding="utf-8")
-    assert "UNITTEST_EXIT_STATUS=0" in prompt
+    assert "TEST_COMMAND_SCOPE=pytest-q-generic" in prompt
+    assert "TEST_EXIT_STATUS=0" in prompt
     assert "GIT_DIFF_CHECK_EXIT_STATUS=0" in prompt
     assert "CANDIDATE_COMMIT_NONEMPTY=true" in prompt
     event = json.loads(result.stdout)

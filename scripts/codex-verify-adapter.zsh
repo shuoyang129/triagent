@@ -668,8 +668,8 @@ elif [[ "${contract}" == *"tests.test_g1_isaac_telemetry_safety tests.test_g1_of
     scripts/run_g1_isaac_telemetry_safety_rehearsal.py > "${compile_log}" 2>&1
   compile_status=$?
 else
-  test_scope="unittest-discover"
-  "${python_bin}" -m unittest discover -s tests -v > "${test_log}" 2>&1
+  test_scope="pytest-q-generic"
+  "${python_bin}" -m pytest -q > "${test_log}" 2>&1
   test_status=$?
   compile_status="not-requested"
 fi
@@ -691,9 +691,9 @@ fi
 evidence=$'\n\nTRIAGENT_EMBEDDED_VERIFICATION_EVIDENCE_V1\n'
 evidence+=$'VERIFICATION_EXECUTION_RULE: Do not invoke tools or request permissions. Verify only the independently collected evidence below and return exactly the required JSON object.\n'
 evidence+=$'VERIFIER_ROLE_BOUNDARY: When visual_check is required, semantic image inspection belongs exclusively to the later independent reviewer stage. The verifier must validate artifact integrity and must not fail solely because that later visual review is pending.\n'
-evidence+="UNITTEST_COMMAND_SCOPE=${test_scope}"
+evidence+="TEST_COMMAND_SCOPE=${test_scope}"
 evidence+=$'\n'
-evidence+="UNITTEST_EXIT_STATUS=${test_status}"
+evidence+="TEST_EXIT_STATUS=${test_status}"
 evidence+=$'\nPY_COMPILE_EXIT_STATUS='
 evidence+="${compile_status}"
 evidence+=$'\nPOLICY_JSON_EXIT_STATUS='
@@ -710,7 +710,7 @@ evidence+=$'\nPARENT_COMMIT='
 evidence+="${parent_commit}"
 evidence+=$'\nGIT_STATUS\n'
 evidence+="$(git -c core.quotepath=false status --short 2>/dev/null || true)"
-evidence+=$'\nUNITTEST_OUTPUT\n'
+evidence+=$'\nTEST_OUTPUT\n'
 evidence+="$(head -c 60000 "${test_log}")"
 evidence+=$'\nPY_COMPILE_OUTPUT\n'
 evidence+="$(head -c 10000 "${compile_log}")"
