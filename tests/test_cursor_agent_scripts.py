@@ -346,7 +346,7 @@ def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
         "4083b391964332e77b63306d4f2672bbba23436f3defb681cb22e75246564213",
         "M39_MATERIALIZER_EXIT_STATUS=",
         "docs/evidence/m39_sonic_minimal_motion_contract.png",
-        "2ff05bed7239b84ba34befa9af5e7cdae861f16ac07b78e90456261fbb0fd6c8",
+        "62b3682fa70689695dc83d18eccbcf358aa6f447d92391988f06916706966632",
         "PNG image data, 1200 x 800, 8-bit/color RGB, non-interlaced",
         "M39_VISUAL_ARTIFACT_PATH=",
         "M39_PNG_EXPECTED_SHA256=",

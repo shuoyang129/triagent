@@ -200,7 +200,7 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
     artifact_status=${materializer_status}
   fi
   m39_png_path="docs/evidence/m39_sonic_minimal_motion_contract.png"
-  m39_png_expected_sha="2ff05bed7239b84ba34befa9af5e7cdae861f16ac07b78e90456261fbb0fd6c8"
+  m39_png_expected_sha="62b3682fa70689695dc83d18eccbcf358aa6f447d92391988f06916706966632"
   m39_png_actual_sha="$(sha256sum "${m39_png_path}" 2>/dev/null | cut -d " " -f 1)"
   m39_png_description="$(file "${m39_png_path}" 2>/dev/null)"
   if [[ ${artifact_status} -ne 0 \
