@@ -49,7 +49,7 @@ def test_concrete_dgx_profile_uses_verified_paths_and_budgets() -> None:
     ]
     assert config["agents"]["deepseek"] == {
         "enabled": True,
-        "model": "deepseek/deepseek-v4-pro",
+        "model": "deepseek/deepseek-v4-flash",
         "command": ["/home/ys/.opencode/bin/opencode"],
         "estimated_usd": 1.0,
         "probe_estimated_usd": 0.25,

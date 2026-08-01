@@ -3,8 +3,8 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "triagent"
-version = "0.1.0"
+name = "triagent-v2"
+version = "0.2.0"
 description = "Cross-platform orchestration for Codex, Cursor, and Antigravity"
 requires-python = ">=3.12"
 dependencies = [
@@ -16,7 +16,10 @@ dependencies = [
 test = ["pytest>=9,<10"]
 
 [project.scripts]
-triagent = "triagent.cli:app"
+triagent-v2 = "triagent.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/triagent"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

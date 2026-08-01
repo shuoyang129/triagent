@@ -45,7 +45,7 @@ while IFS= read -r relative_path; do
   esac
 done < <(git -c core.quotepath=false ls-files --others --exclude-standard 2>/dev/null)
 
-review_evidence="${review_evidence[1,80000]}"
+review_evidence="${review_evidence[1,40000]}"
 instruction_text="$(<"${source_path}")"
 generic_workdir_rule='WORKDIR_RULE=Run every repository inspection, test, and tool call in AUTHORITATIVE_WORKDIR_JSON; TASK scope paths describe the source repository and must not replace this workdir.'
 review_workdir_rule='WORKDIR_RULE=Do not run repository inspections, tests, or tools. Independently review only the controller-embedded task, handoff, committed patch, and Codex evidence.'

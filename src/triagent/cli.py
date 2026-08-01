@@ -22,10 +22,16 @@ from triagent.git_workspace import GitWorkspace
 from triagent.orchestrator import Orchestrator
 from triagent.report import render_persisted_report
 from triagent.router import ImplementationRouter
+from triagent.runtime import DataRootError, resolve_v2_data_root
 from triagent.store import TaskStore
+from triagent import __version__
 
 
-app = typer.Typer(no_args_is_help=True, help="Run and inspect TriAgent tasks.")
+app = typer.Typer(
+    no_args_is_help=True,
+    invoke_without_command=True,
+    help="Run and inspect TriAgent tasks.",
+)
 DataRoot = Annotated[Path, typer.Option(help="TriAgent state directory.")]
 RiskOption = Annotated[RiskLevel, typer.Option("--risk", help="Declared task risk level.")]
 AcceptanceOptions = Annotated[list[str], typer.Option("--acceptance", help="Repeatable acceptance criterion.")]
@@ -36,8 +42,22 @@ VisualCheckOption = Annotated[
 ]
 
 
-def _root(value: Path | None) -> Path:
-    return value or Path(os.environ.get("TRIAGENT_HOME", ".triagent"))
+@app.callback()
+def main(
+    version: Annotated[
+        bool, typer.Option("--version", help="Show the triagent-v2 version.")
+    ] = False,
+) -> None:
+    if version:
+        typer.echo(f"triagent-v2 {__version__}")
+        raise typer.Exit()
+
+
+def _root(value: Path | None, *, allow_initialize: bool = False) -> Path:
+    try:
+        return resolve_v2_data_root(value, allow_initialize=allow_initialize)
+    except DataRootError as error:
+        raise typer.BadParameter(str(error)) from error
 
 
 def _spec(
@@ -142,7 +162,7 @@ def create(
     data_root: DataRoot = None,
 ) -> None:
     try:
-        task = TaskStore(_root(data_root)).create_task(
+        task = TaskStore(_root(data_root, allow_initialize=True)).create_task(
             _spec(repo, goal, risk, acceptance, forbidden, visual_check)
         )
     except Exception:
@@ -175,7 +195,7 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
     except (OSError,tomllib.TOMLDecodeError,ValueError,TypeError,RuntimeError):
         raise typer.BadParameter("task input validation failed") from None
     try:
-        store = TaskStore(_root(data_root)); task = store.create_task(
+        store = TaskStore(_root(data_root, allow_initialize=True)); task = store.create_task(
             _spec(repo, goal, risk, acceptance, forbidden, visual_check, budget)
         )
     except Exception:

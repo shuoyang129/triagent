@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-01",
+  "controller": {
+    "name": "triagent",
+    "git_commit": "acfd40b052963d1ba89814ea39a7ae5ebe73750c",
+    "git_subject": "test: refresh M39 recovery verifier counts",
+    "installation": {
+      "python": "/home/ys/miniforge3/envs/triagent/bin/python",
+      "package": "triagent==0.1.0",
+      "install_mode": "editable",
+      "source": "/home/ys/works/robots/triagent/src"
+    }
+  },
+  "remote_tracking": {
+    "origin_main": "7214d42fc903148001c0917bccbb7d763ba478e3",
+    "relation": "local baseline is ahead of origin/main; no remote tag was created"
+  },
+  "runtime": {
+    "frozen_wheel": {
+      "path": "/tmp/triagent-original-baseline/dist/triagent-0.1.0-py3-none-any.whl",
+      "sha256": "8e6d65e55d24cc0e2c496051b3b85a92631ef2145edfc7023e2a4a8a940eff30",
+      "installed_environment": "/home/ys/miniforge3/envs/triagent-original-frozen",
+      "install_mode": "non-editable wheel installed in site-packages"
+    },
+    "python_version": "3.12.13",
+    "dependencies": {
+      "pydantic": "2.13.4",
+      "pydantic_core": "2.46.4",
+      "typer": "0.26.8",
+      "pytest": "9.1.1",
+      "openai": "2.47.0"
+    }
+  },
+  "files": {
+    "profiles/dgx.spark.toml": "623d61a42f1d5ebdf2bf8603807c0f4167d4a8129b65295c399c5285e8c48bf5",
+    "pyproject.toml": "5a0c3f252c25ff588fa9c23a38c62a725db6dc114489e169ad0631856e646911",
+    "scripts/agy-review-adapter.zsh": {
+      "deployed_sha256": "62b8b1180b6b1be680325a1c1472ccacf994500dd0608981ea22306108750e48",
+      "committed_sha256": "45f81950cf13c9960887dee66270e371f83a928d70bc8545b47d1f9082c1f3e1",
+      "mode": "100755",
+      "patch": "original-controller-acfd40b05296-agy.patch"
+    }
+  },
+  "data_root": {
+    "path": "/home/ys/works/robots/triagent-runs",
+    "sqlite": "triagent.sqlite3",
+    "mode": "0775",
+    "sqlite_size_bytes": 2985984,
+    "sqlite_mtime_epoch": 1785590222,
+    "inspection_rule": "v2 must reject this root before constructing TaskStore"
+  },
+  "verification": {
+    "original_full_test_result": "2 failed, 294 passed, 9 skipped in 57.71s (PYTHONDONTWRITEBYTECODE=1; pytest cache disabled). The failures are pre-existing environment/configuration drift: inherited CODEX_HOME is allowlisted by the Codex adapter, and the profile configures deepseek-v4-flash while the test expects deepseek-v4-pro. The frozen controller was not modified.",
+    "original_status_report_inspection": "not run: TaskStore initialization is write-capable"
+  }
+}

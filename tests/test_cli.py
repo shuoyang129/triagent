@@ -20,6 +20,7 @@ from triagent.orchestrator import Orchestrator
 from triagent.report import REPORT_FIELDS
 from triagent.report import render_report
 from triagent.store import TaskStore
+import triagent.runtime as runtime
 
 
 runner = CliRunner()
@@ -603,13 +604,15 @@ def test_exact_default_root_invocation_isolated_and_preserves_fixture(tmp_path: 
     subprocess.run(["git", "commit", "-qm", "fixture"], cwd=fixture, check=True)
     source_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=fixture, check=True, capture_output=True, text=True).stdout.strip()
 
+    v2_root = tmp_path / "runs-v2"
+    monkeypatch.setattr(runtime, "DEFAULT_V2_DATA_ROOT", v2_root)
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["run", *structured_args(), "--profile", "fake", "tests/fixtures/sample-repo", "add a health endpoint"])
 
     assert result.exit_code == 0, result.output
     assert "State: APPROVAL" in result.output
     task_id = result.output.split("Task: ", 1)[1].splitlines()[0]
-    run_dir = tmp_path / ".triagent" / "runs" / task_id
+    run_dir = v2_root / "runs" / task_id
     isolated = run_dir / "worktree"
     assert (run_dir / "final-report.md").exists()
     assert (isolated / ".git").exists()
