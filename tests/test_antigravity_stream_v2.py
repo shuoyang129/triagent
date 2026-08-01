@@ -137,6 +137,26 @@ def test_v2_agy_wrapper_emits_progress_only_for_provider_output_records(tmp_path
     assert canonical == [json.dumps(json.loads(_payload()), separators=(",", ":"))]
 
 
+def test_v2_agy_wrapper_normalizes_bounded_finding_aliases(tmp_path: Path) -> None:
+    wrapper = Path(__file__).resolve().parents[1] / "scripts" / "agy-review-adapter.zsh"
+    provider = tmp_path / "fake-agy.zsh"
+    instruction = tmp_path / "instruction.txt"
+    instruction.write_text("offline wrapper test", encoding="utf-8")
+    payload = json.dumps({"status": "passed", "evidence": [], "artifacts": [], "findings": [{"severity": "high", "message": "bounded finding", "extra": "discarded"}]})
+    provider.write_text("#!/usr/bin/env zsh\n" + f"print -r -- {payload!r}\n", encoding="utf-8")
+    provider.chmod(0o700)
+
+    result = subprocess.run(
+        ["zsh", str(wrapper), "-p", f"Read and follow the complete instructions in this local file: {instruction}"],
+        cwd=tmp_path, env={**os.environ, "AGY_BIN": str(provider)}, text=True, capture_output=True, check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "status": "passed", "evidence": [], "artifacts": [],
+        "findings": [{"severity": "MAJOR", "code": "review-finding-1", "message": "bounded finding"}],
+    }
+
 def test_v2_agy_liveness_does_not_refresh_idle_timeout(tmp_path: Path) -> None:
     wrapper = Path(__file__).resolve().parents[1] / "scripts" / "agy-review-adapter.zsh"
     provider = tmp_path / "silent-agy.zsh"

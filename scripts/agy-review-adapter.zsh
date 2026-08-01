@@ -134,15 +134,56 @@ import sys
 text = sys.stdin.read().strip()
 required = {"status", "evidence", "artifacts", "findings"}
 
+def canonical(value):
+    """Return only the review wire contract, or reject malformed provider data."""
+    if not isinstance(value, dict) or not required.issubset(value):
+        return None
+    status = value.get("status")
+    evidence = value.get("evidence")
+    artifacts = value.get("artifacts")
+    findings = value.get("findings")
+    if status not in {"passed", "failed"}:
+        return None
+    if not isinstance(evidence, list) or len(evidence) > 50 or not all(isinstance(item, str) for item in evidence):
+        return None
+    if not isinstance(artifacts, list) or len(artifacts) > 50 or not all(isinstance(item, str) for item in artifacts):
+        return None
+    if not isinstance(findings, list) or len(findings) > 50:
+        return None
+    severity_map = {
+        "BLOCKER": "BLOCKER", "CRITICAL": "BLOCKER", "HIGH": "MAJOR",
+        "MAJOR": "MAJOR", "MEDIUM": "MINOR", "MINOR": "MINOR",
+        "LOW": "NOTE", "NOTE": "NOTE", "INFO": "NOTE",
+    }
+    normalized = []
+    for number, finding in enumerate(findings, start=1):
+        if not isinstance(finding, dict):
+            return None
+        severity = finding.get("severity")
+        message = finding.get("message")
+        code = finding.get("code")
+        if not isinstance(severity, str) or severity_map.get(severity.upper()) is None:
+            return None
+        if not isinstance(message, str) or not message or len(message) > 500:
+            return None
+        if not isinstance(code, str) or not code or len(code) > 100:
+            code = f"review-finding-{number}"
+        normalized.append({"severity": severity_map[severity.upper()], "code": code, "message": message})
+    result = {"status": status, "evidence": evidence, "artifacts": artifacts, "findings": normalized}
+    actual_usd = value.get("actual_usd")
+    if isinstance(actual_usd, (int, float)) and not isinstance(actual_usd, bool):
+        result["actual_usd"] = actual_usd
+    return result
+
 def accepted(value):
-    return isinstance(value, dict) and required.issubset(value)
+    return canonical(value) is not None
 
 try:
     whole = json.loads(text)
 except (json.JSONDecodeError, TypeError):
     whole = None
 if accepted(whole):
-    print(json.dumps(whole, ensure_ascii=False, separators=(",", ":")))
+    print(json.dumps(canonical(whole), ensure_ascii=False, separators=(",", ":")))
     raise SystemExit(0)
 
 fenced = []
@@ -152,7 +193,7 @@ for match in re.finditer(r"```(?:json)?\s*(.*?)```", text, re.IGNORECASE | re.DO
     except (json.JSONDecodeError, TypeError):
         continue
     if accepted(value):
-        fenced.append(value)
+        fenced.append(canonical(value))
 if fenced:
     print(json.dumps(fenced[-1], ensure_ascii=False, separators=(",", ":")))
     raise SystemExit(0)
@@ -171,7 +212,7 @@ for start, character in enumerate(text):
 if not objects:
     print("TriAgent AGY output contained no canonical review JSON object", file=sys.stderr)
     raise SystemExit(65)
-value = max(objects, key=lambda item: item[0])[1]
+value = canonical(max(objects, key=lambda item: item[0])[1])
 print(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
 '; then
   save_diagnostic 0
