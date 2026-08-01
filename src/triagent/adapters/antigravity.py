@@ -93,6 +93,8 @@ def _invoke_agy_stream(
 
     def recognizes(stream: str, text: str) -> bool:
         nonlocal terminal
+        if stream == "stderr":
+            return "TRIAGENT_AGY_PROVIDER_OUTPUT_V1" in text
         if stream != "stdout" or terminal:
             return False
         # The v2-owned wrapper emits this marker only after it has received a

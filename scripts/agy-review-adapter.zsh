@@ -95,7 +95,7 @@ last_provider_signal=-1
     print -r -- "${record}" >> "${stdout_file}"
     # Coalesce genuine provider records without a timer-driven signal.
     if (( SECONDS != last_provider_signal )); then
-      print -r -- "TRIAGENT_AGY_PROVIDER_OUTPUT_V1"
+      print -u2 -r -- "TRIAGENT_AGY_PROVIDER_OUTPUT_V1"
       last_provider_signal=$SECONDS
     fi
   done < "${stream_fifo}"
@@ -105,7 +105,7 @@ stream_reader_pid=$!
 agy_pid=$!
 {
   while kill -0 "${agy_pid}" 2>/dev/null; do
-    print -r -- "TRIAGENT_AGY_LIVENESS_V1"
+    print -u2 -r -- "TRIAGENT_AGY_LIVENESS_V1"
     sleep 5
   done
 } &
