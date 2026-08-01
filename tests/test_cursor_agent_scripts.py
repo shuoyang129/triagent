@@ -320,6 +320,7 @@ def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
         in route_condition
     )
     assert "Harden the M39 v25 damping-stop CRC cache contract" in route_condition
+    assert "M39 physical G1 repair review v27d" in route_condition
     for required in (
         "tests/test_m39_minimal_motion_adapter.py",
         "services/g1_telemetry/sonic_minimal_motion.py",

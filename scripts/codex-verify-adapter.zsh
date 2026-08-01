@@ -147,6 +147,7 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
    || "${contract}" == *"Repair M39 after physical expiry run v23 failed safely before active motion"* \
    || "${contract}" == *"Repair M39 after physical expiry run v24 exposed publisher initialization latency"* \
    || "${contract}" == *"Harden the M39 v25 damping-stop CRC cache contract"* \
+   || "${contract}" == *"M39 physical G1 repair review v27d"* \
    || "${contract}" == *"M39 physical restore repair final pre-active review"* ]]; then
   test_scope="m39-exact-135-329-15"
   test_status=0
