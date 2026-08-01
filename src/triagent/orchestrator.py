@@ -14,6 +14,7 @@ from triagent.adapters.codex import CodexAdapter
 from triagent.adapters.antigravity import AntigravityAdapter
 from triagent.adapters.deepseek import DeepSeekAdapter
 from triagent.adapters.fake import FakeAgent
+from triagent.completion import CompletionControl, DurableResult
 
 _TRUSTED={CursorAdapter:("cursor",frozenset({AgentRole.IMPLEMENTER})),CodexAdapter:("codex",frozenset({AgentRole.VERIFIER})),AntigravityAdapter:("antigravity",frozenset({AgentRole.REVIEWER})),DeepSeekAdapter:("deepseek",frozenset({AgentRole.IMPLEMENTER}))}
 _SAFE_DIAGNOSTICS=frozenset({
@@ -77,6 +78,50 @@ class Orchestrator:
         self.expected_recovery_checkpoint = expected_recovery_checkpoint
         self.implementer_probe_estimated_usd = implementer_probe_estimated_usd
         self._lease_owner: str | None = None
+
+    def consume_fake_durable_completion(
+        self,
+        control: CompletionControl,
+        *,
+        expected_candidate_commit: str | None = None,
+    ) -> DurableResult:
+        """Persist and receipt a validated fake result without a second call.
+
+        This is deliberately a narrow M6 bridge, rather than a replacement for
+        ``_call``: no real adapter can enter it and no provider is invoked here.
+        The store ledger is committed before the filesystem receipt.  If the
+        controller dies in that gap, retrying the same durable record is
+        idempotent and only writes the missing receipt.
+        """
+        if not all(type(adapter) is FakeAgent for adapter in (
+            self.implementer, self.verifier, self.reviewer,
+        )):
+            raise ValueError("durable completion bridge is fake-only")
+        if self._lease_owner is None:
+            raise LeaseConflict("controller lease is required for durable completion")
+        binding = control.binding
+        if binding.provider != "fake":
+            raise ValueError("durable completion binding is not fake")
+
+        def persist() -> None:
+            result = control.read_result(
+                expected_candidate_commit=expected_candidate_commit
+            )
+            self.store.record_durable_completion(
+                task_id=binding.task_id,
+                call_id=binding.call_id,
+                provider=binding.provider,
+                role=binding.role,
+                result_digest=result.result_digest,
+                candidate_commit=result.candidate_commit,
+                outcome=dict(result.outcome),
+                lease_owner=self._lease_owner,
+            )
+
+        return control.consume_once(
+            expected_candidate_commit=expected_candidate_commit,
+            before_receipt=persist,
+        )
 
     def _execution_provenance(self) -> dict[str, str]:
         implementer = _contract(self.implementer)[0]
