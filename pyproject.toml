@@ -16,10 +16,10 @@ dependencies = [
 test = ["pytest>=9,<10"]
 
 [project.scripts]
-triagent-v2 = "triagent.cli:app"
+triagent-v2 = "triagent_v2_bootstrap:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/triagent"]
+packages = ["src/triagent", "src/triagent_v2_bootstrap"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
