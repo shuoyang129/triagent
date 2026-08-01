@@ -33,3 +33,22 @@ blocking residual findings.  The persisted finding codes are:
 - `DDS_SHARED_OWNERSHIP_NO_EXCLUSIVITY`
 - `UNVERIFIED_REMOTE_WRITER_IDENTITY`
 - `SAFE_HOLD_CONTINUITY_UNPROVEN`
+
+## Semantic validation — current isolated controller
+
+Task `4be42b96-2afd-430d-9458-80290b10707b` repeated the same live,
+billing-confirmed, strictly read-only boundary with the current v2 controller.
+It completed verification and review, then recorded
+`read-only-target-admission-denied` and stopped in `INSPECTION_HOLD`.
+
+This is controller acceptance evidence: a target-risk conclusion is represented
+as an intentional fail-closed hold, not as `FAILED_FINAL`. It does not admit
+this target to any mutation, deployment, simulation, service, or hardware
+stage. The source snapshot is identical before and after.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `final-report.md` | `5cc713cfc1a8d59479bed906a72cbb594da249e2f737c3e65972cb2269be8c9a` |
+| `events.jsonl` | `3ed0cf48d504385f8d0ce6c9fd3bacbfac37bc0a4c23af38be8b68a97bf898dd` |
+| `source-snapshot.json` | `6c3a9966e8ebdc8be40dc69be59177858a0a5beff31fa516790b75cd493e3635` |
+| `timeout-selections.json` | `fc1b0f43fda9d38a8629bf940dcd36e33c5cbc7157b4345b50c83c268c2cbcd0` |
