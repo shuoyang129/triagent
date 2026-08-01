@@ -49,9 +49,10 @@ review_evidence="${review_evidence[1,40000]}"
 instruction_text="$(<"${source_path}")"
 generic_workdir_rule='WORKDIR_RULE=Run every repository inspection, test, and tool call in AUTHORITATIVE_WORKDIR_JSON; TASK scope paths describe the source repository and must not replace this workdir.'
 review_workdir_rule='WORKDIR_RULE=Do not run repository inspections, tests, or tools. Independently review only the controller-embedded task, handoff, committed patch, and Codex evidence.'
-instruction_text="${instruction_text//$generic_workdir_rule/$review_workdir_rule}${review_evidence}"
+review_output_rule=$'\nTRIAGENT_FINAL_OUTPUT_CONTRACT_V1\nReturn exactly one JSON object and no prose or markdown. The object must have exactly these keys: status, evidence, artifacts, findings. status is passed or failed. evidence and artifacts are arrays of strings. findings is an array of objects with exactly severity (BLOCKER, MAJOR, MINOR, or NOTE), code, and message. Use [] for empty arrays.\n'
+instruction_text="${instruction_text//$generic_workdir_rule/$review_workdir_rule}${review_evidence}${review_output_rule}"
 if [[ "${instruction_text}" != *"${review_workdir_rule}"* ]]; then
-  instruction_text+=$'\n'"${review_workdir_rule}"
+  instruction_text+=$'\n'"${review_workdir_rule}${review_output_rule}"
 fi
 args[prompt_index]="${instruction_text}"
 args=("--new-project" "${args[@]}")
