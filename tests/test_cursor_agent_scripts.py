@@ -307,6 +307,10 @@ def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
     route_condition = text.split(route_start, 1)[1].split("then", 1)[0]
     assert "M39 physical G1 repair review" in route_condition
     assert "M39 physical restore repair" in route_condition
+    assert (
+        "M39 physical restore repair final pre-active review"
+        in route_condition
+    )
     for required in (
         "tests/test_m39_minimal_motion_adapter.py",
         "services/g1_telemetry/sonic_minimal_motion.py",

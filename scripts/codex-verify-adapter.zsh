@@ -141,7 +141,8 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
    && "${contract}" == *"tests/test_m39_minimal_motion_adapter.py"* ) \
    || ( "${contract}" == *"M39 physical restore repair"* \
    && "${contract}" == *"scripts/m39_minimal_motion_adapter.py"* \
-   && "${contract}" == *"tests/test_m39_minimal_motion_adapter.py"* ) ]]; then
+   && "${contract}" == *"tests/test_m39_minimal_motion_adapter.py"* ) \
+   || "${contract}" == *"M39 physical restore repair final pre-active review"* ]]; then
   test_scope="m39-exact-93-287-15"
   test_status=0
   "${python_bin}" -m pytest -q \
