@@ -23,6 +23,7 @@ from triagent.orchestrator import Orchestrator
 from triagent.report import render_persisted_report
 from triagent.router import ImplementationRouter
 from triagent.runtime import DataRootError, resolve_v2_data_root
+from triagent.runtime_config import RuntimeConfigError, load_runtime_config
 from triagent.store import TaskStore
 from triagent import __version__
 
@@ -55,8 +56,12 @@ def main(
 
 def _root(value: Path | None, *, allow_initialize: bool = False) -> Path:
     try:
+        if value is None and "TRIAGENT_HOME" in os.environ:
+            return resolve_v2_data_root(None, allow_initialize=allow_initialize)
+        if value is None:
+            value = load_runtime_config().data_root
         return resolve_v2_data_root(value, allow_initialize=allow_initialize)
-    except DataRootError as error:
+    except (DataRootError, RuntimeConfigError) as error:
         raise typer.BadParameter(str(error)) from error
 
 
@@ -378,7 +383,15 @@ def report_command(task_id: str, data_root: DataRoot = None) -> None:
 
 
 @app.command()
-def doctor(profile: Annotated[str, typer.Option()] = "fake") -> None:
+def doctor(
+    profile: Annotated[str, typer.Option()] = "fake",
+    resolved: Annotated[bool, typer.Option("--resolved", help="Show non-secret runtime bindings.")] = False,
+) -> None:
+    if resolved:
+        try:
+            typer.echo("\n".join(load_runtime_config().doctor_lines()))
+        except RuntimeConfigError as error:
+            raise typer.BadParameter(str(error)) from error
     if profile == "fake":
         typer.echo("Fake: ready (no vendor calls)")
         return

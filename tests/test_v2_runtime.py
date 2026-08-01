@@ -7,13 +7,14 @@ import tomllib
 import pytest
 from typer.testing import CliRunner
 
-from triagent.cli import app
+from triagent.cli import _root, app
 from triagent.runtime import (
     DataRootError,
     ROOT_MARKER,
     _ROOT_FORMAT,
     resolve_v2_data_root,
 )
+from triagent.runtime_config import load_runtime_config
 import triagent.runtime as runtime
 
 
@@ -88,3 +89,22 @@ def test_v2_profile_binds_only_the_v2_agy_wrapper() -> None:
     assert 'review_evidence="${review_evidence[1,40000]}"' in (
         Path(command[0]).read_text(encoding="utf-8")
     )
+
+
+def test_v2_runtime_config_selects_data_root_and_doctor_shows_only_bindings(
+    tmp_path: Path, monkeypatch
+) -> None:
+    configured_root = tmp_path / "configured-runs-v2"
+    config = tmp_path / "runtime-v2.toml"
+    config.write_text(
+        f'[paths]\ndata_root = "{configured_root}"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("TRIAGENT_RUNTIME_CONFIG", str(config))
+
+    assert load_runtime_config().data_root == configured_root
+    assert _root(None, allow_initialize=True) == configured_root
+    result = CliRunner().invoke(app, ["doctor", "--resolved", "--profile", "fake"])
+
+    assert result.exit_code == 0
+    assert str(configured_root) in result.output
+    assert "Fake: ready (no vendor calls)" in result.output
