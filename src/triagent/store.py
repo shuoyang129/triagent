@@ -260,6 +260,7 @@ class TaskStore:
         candidate_commit: str,
         outcome: dict[str, object],
         lease_owner: str,
+        actual_usd: float | None = None,
     ) -> bool:
         """Commit a validated v2 completion once while the controller owns it.
 
@@ -296,10 +297,12 @@ class TaskStore:
             ):
                 raise LeaseConflict("controller lease is not owned")
             call = connection.execute(
-                "SELECT status FROM agent_calls WHERE id=? AND task_id=?", (call_id, task_id)
+                "SELECT status,estimated_usd FROM agent_calls WHERE id=? AND task_id=?", (call_id, task_id)
             ).fetchone()
-            if call is None or call["status"] != "completed":
-                raise StateConflict("durable completion call is not completed")
+            if call is None or call["status"] not in {"started", "completed"}:
+                raise StateConflict("durable completion call is not pending or completed")
+            if actual_usd is not None and actual_usd > call["estimated_usd"]:
+                raise BudgetExceeded("actual cost exceeds conservative reservation")
             existing = connection.execute(
                 "SELECT provider,role,result_digest,candidate_commit,outcome_json "
                 "FROM durable_completions WHERE task_id=? AND call_id=?", (task_id, call_id)
@@ -313,6 +316,19 @@ class TaskStore:
                     raise StateConflict("durable completion conflicts with existing record")
                 connection.commit()
                 return False
+            if call["status"] == "started":
+                charged = call["estimated_usd"] if actual_usd is None else actual_usd
+                cursor = connection.execute(
+                    "UPDATE agent_calls SET status='completed',actual_usd=?,charged_usd=?,diagnostic='' "
+                    "WHERE id=? AND task_id=? AND status='started'",
+                    (actual_usd, charged, call_id, task_id),
+                )
+                if cursor.rowcount != 1:
+                    raise StateConflict("durable completion call changed")
+                connection.execute(
+                    "UPDATE task_runtime SET completed_calls=completed_calls+1,usd_spent=usd_spent+? WHERE task_id=?",
+                    (charged, task_id),
+                )
             connection.execute(
                 "INSERT INTO durable_completions("
                 "task_id,call_id,provider,role,result_digest,candidate_commit,outcome_json,consumed_at"

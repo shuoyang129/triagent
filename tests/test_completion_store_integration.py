@@ -91,3 +91,27 @@ def test_durable_completion_requires_current_controller_lease(tmp_path: Path) ->
     with pytest.raises(LeaseConflict):
         orchestrator.consume_fake_durable_completion(control)
     assert not control.receipt_path.exists()
+
+
+def test_durable_ledger_atomically_completes_an_inflight_reserved_call(tmp_path: Path) -> None:
+    store = TaskStore(tmp_path / "data")
+    task = store.create_task(TaskSpec(goal="offline", scope=["."], acceptance=["offline"]))
+    call_id = store.reserve_agent_call(task.id, estimated_usd=0.0)
+    owner = str(uuid.uuid4())
+    store.acquire_lease(task.id, owner, 60)
+
+    assert store.record_durable_completion(
+        task_id=task.id,
+        call_id=call_id,
+        provider="fake",
+        role="verifier",
+        result_digest="e" * 64,
+        candidate_commit=COMMIT,
+        outcome={"status": "ok"},
+        lease_owner=owner,
+        actual_usd=0.0,
+    )
+    assert store.runtime(task.id).completed_calls == 1
+    with store._connect() as connection:
+        row = connection.execute("SELECT status FROM agent_calls WHERE id=?", (call_id,)).fetchone()
+    assert row["status"] == "completed"
