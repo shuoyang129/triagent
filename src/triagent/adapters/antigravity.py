@@ -4,7 +4,7 @@ from collections.abc import Sequence
 
 from triagent.adapters._cli import TransportSecurityError,external_restricted_input,invoke_json, probe, runtime
 from triagent.adapters.base import AgentAdapter, AgentCapabilities, AgentRequest, AgentResult, AgentRole, AgentStatus, CostEstimate
-from triagent.adapters.process import ProcessRunner, StreamPolicy, StreamingProcessResult, StreamingProcessRunner
+from triagent.adapters.process import ProcessResult, ProcessRunner, StreamPolicy, StreamingProcessResult, StreamingProcessRunner
 
 
 class AntigravityAdapter(AgentAdapter):
@@ -88,19 +88,29 @@ def _invoke_agy_stream(
     """Stream the wrapper while retaining its one-object/fenced JSON contract."""
     chunks: list[str] = []
     terminal = False
+    provider_output_marker = "TRIAGENT_AGY_PROVIDER_OUTPUT_V1"
+    liveness_marker = "TRIAGENT_AGY_LIVENESS_V1"
 
     def recognizes(stream: str, text: str) -> bool:
         nonlocal terminal
         if stream != "stdout" or terminal:
             return False
-        # The runner separately caps retained process evidence.  This bounded
-        # classifier only treats a complete canonical-shaped JSON object as
-        # meaningful progress, so MCP chatter cannot defeat an idle timeout.
+        # The v2-owned wrapper emits this marker only after it has received a
+        # provider output record. It contains no provider text, and no wrapper
+        # timer can create it. It is meaningful provider progress; ordinary
+        # wrapper liveness remains non-progress.
         if sum(map(len, chunks)) + len(text) > 256 * 1024:
             chunks.clear()
             return False
         chunks.append(text)
-        candidate = "".join(chunks).strip()
+        candidate = "".join(chunks)
+        provider_output_seen = provider_output_marker in candidate
+        internal_marker_seen = provider_output_seen or liveness_marker in candidate
+        if internal_marker_seen:
+            candidate = candidate.replace(provider_output_marker, "")
+            candidate = candidate.replace(liveness_marker, "")
+            chunks[:] = [candidate]
+        candidate = candidate.strip()
         if candidate.startswith("```json") and candidate.endswith("```"):
             candidate = candidate[len("```json"): -3].strip()
         elif candidate.startswith("```") and candidate.endswith("```"):
@@ -109,12 +119,12 @@ def _invoke_agy_stream(
             import json
             payload = json.loads(candidate)
         except (json.JSONDecodeError, TypeError):
-            return False
+            return provider_output_seen
         if not isinstance(payload, dict):
-            return False
+            return provider_output_seen
         required = {"status", "evidence", "artifacts", "findings"}
         if not required.issubset(payload):
-            return False
+            return provider_output_seen
         terminal = True
         return True
 
@@ -131,7 +141,12 @@ def _invoke_agy_stream(
     # in-memory result.  It cannot invoke a provider or perform a fallback.
     class _Completed:
         def run(self, *_args, **_kwargs):
-            return result
+            # Marker records are internal controller progress evidence, not
+            # part of AGY's canonical JSON wire contract.
+            return ProcessResult(
+                result.returncode, result.stdout.replace(provider_output_marker, "").replace(liveness_marker, ""),
+                result.stderr, result.timed_out,
+            )
     return invoke_json(
         _Completed(), argv, cwd, policy.hard_timeout, env, secrets, role,
         allow_fenced_json=True, empty_output_diagnostic="agy-empty-output",

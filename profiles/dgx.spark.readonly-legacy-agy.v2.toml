@@ -1,3 +1,6 @@
+# Isolated v2 gray profile: Codex proves streaming structured output, while
+# AGY retains its established blocking review transport until it emits reliable
+# stream progress.  It never changes the original triagent profile.
 [triagent]
 profile_version = 2
 
@@ -14,7 +17,7 @@ stream_v2 = false
 [agents.antigravity]
 command = ["/home/ys/works/robots/triagent-v2/scripts/agy-review-adapter.zsh"]
 estimated_usd = 1.0
-stream_v2 = true
+stream_v2 = false
 
 [agents.deepseek]
 enabled = false

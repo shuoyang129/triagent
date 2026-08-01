@@ -57,9 +57,14 @@ args[prompt_index]="${instruction_text}"
 args=("--new-project" "${args[@]}")
 
 umask 077
-stdout_file="$(mktemp "${TMPDIR:-/tmp}/triagent-agy-stdout.XXXXXX")"
-stderr_file="$(mktemp "${TMPDIR:-/tmp}/triagent-agy-stderr.XXXXXX")"
-cleanup() { rm -f -- "${stdout_file}" "${stderr_file}"; }
+private_dir="$(mktemp -d "${TMPDIR:-/tmp}/triagent-agy-review.XXXXXX")"
+chmod 700 "${private_dir}"
+stdout_file="${private_dir}/stdout"
+stderr_file="${private_dir}/stderr"
+stream_fifo="${private_dir}/stdout.fifo"
+: > "${stdout_file}"
+mkfifo -m 600 "${stream_fifo}"
+cleanup() { rm -rf -- "${private_dir}"; }
 trap cleanup EXIT HUP INT TERM
 
 save_diagnostic() {
@@ -79,8 +84,31 @@ save_diagnostic() {
 }
 
 set +e
-"${agy_bin}" "${args[@]}" > "${stdout_file}" 2> "${stderr_file}"
+# The provider's raw output remains private. Each complete output record is
+# converted to a content-free controller marker immediately, so the v2 runner
+# can distinguish real provider activity from a wrapper liveness heartbeat.
+# Liveness itself is separate and never classifies as progress.
+{
+  while IFS= read -r record || [[ -n "${record}" ]]; do
+    print -r -- "${record}" >> "${stdout_file}"
+    print -r -- "TRIAGENT_AGY_PROVIDER_OUTPUT_V1"
+  done < "${stream_fifo}"
+} &
+stream_reader_pid=$!
+"${agy_bin}" "${args[@]}" > "${stream_fifo}" 2> "${stderr_file}" &
+agy_pid=$!
+{
+  while kill -0 "${agy_pid}" 2>/dev/null; do
+    print -r -- "TRIAGENT_AGY_LIVENESS_V1"
+    sleep 5
+  done
+} &
+liveness_pid=$!
+wait "${agy_pid}"
 agy_exit_code=$?
+kill "${liveness_pid}" 2>/dev/null || true
+wait "${liveness_pid}" || true
+wait "${stream_reader_pid}" || true
 set -e
 
 if (( agy_exit_code != 0 )); then

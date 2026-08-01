@@ -4,8 +4,8 @@ from collections.abc import Sequence
 
 import json
 
-from triagent.adapters._cli import canonical_output_schema, invoke_codex_jsonl, invoke_codex_jsonl_stream, probe, read_prompt, runtime
-from triagent.adapters.base import AgentAdapter, AgentCapabilities, AgentRequest, AgentResult, AgentRole, CostEstimate
+from triagent.adapters._cli import canonical_output_schema, invoke_codex_jsonl, invoke_codex_jsonl_stream, parse_codex_final_message, probe, read_prompt, runtime
+from triagent.adapters.base import AgentAdapter, AgentCapabilities, AgentRequest, AgentResult, AgentRole, AgentStatus, CostEstimate
 from triagent.adapters.process import ProcessRunner, StreamPolicy, StreamingProcessRunner
 
 
@@ -55,23 +55,30 @@ class CodexAdapter(AgentAdapter):
         if error:return error
         sandbox = "read-only" if request.read_only else "workspace-write"
         argv = [*self._command,"exec","--sandbox",sandbox,"-C",str(request.workdir)]
+        output_path = None
         if request.read_only:
             schema_path=request.task_file.with_name("codex-output-schema.json")
             schema_path.write_text(json.dumps(canonical_output_schema(request.role),sort_keys=True,separators=(",",":")),encoding="utf-8")
             argv.extend(("--output-schema",str(schema_path)))
+            output_path=request.task_file.with_name("codex-final-message.json")
+            output_path.unlink(missing_ok=True)
+            argv.extend(("--output-last-message",str(output_path)))
         argv.extend(("--json","-"))
-        if not self._stream_v2:
-            return invoke_codex_jsonl(self._runner,argv,request.workdir,request.timeout_seconds,self._env,self._secrets,request.role,stdin=payload)
-        return invoke_codex_jsonl_stream(
-            self._stream_runner,
-            argv,
-            request.workdir,
-            self._stream_policy or _compat_stream_policy(request.timeout_seconds),
-            self._env,
-            self._secrets,
-            request.role,
-            stdin=payload,
-        )
+        try:
+            if not self._stream_v2:
+                result = invoke_codex_jsonl(self._runner,argv,request.workdir,request.timeout_seconds,self._env,self._secrets,request.role,stdin=payload)
+            else:
+                result = invoke_codex_jsonl_stream(
+                    self._stream_runner, argv, request.workdir,
+                    self._stream_policy or _compat_stream_policy(request.timeout_seconds),
+                    self._env, self._secrets, request.role, stdin=payload,
+                )
+            if output_path is not None and result.status is AgentStatus.INVALID_OUTPUT:
+                return parse_codex_final_message(output_path, self._secrets, request.role) or result
+            return result
+        finally:
+            if output_path is not None:
+                output_path.unlink(missing_ok=True)
 
 
 def _compat_stream_policy(timeout_seconds: float) -> StreamPolicy:

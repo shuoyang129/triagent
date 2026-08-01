@@ -30,6 +30,8 @@ from triagent.runtime_manifest import (
     build_runtime_manifest,
     compare_manifests,
 )
+from triagent.adapters.process import StreamPolicy
+from triagent.timeout_policy import Provider, Stage, TaskSize, default_v2_matrix
 from triagent.store import TaskStore
 from triagent import __version__
 
@@ -146,6 +148,24 @@ def _profile_stream_v2_options(config: dict) -> dict[str, bool]:
             raise ValueError("stream_v2 requires an explicit triagent v2 profile")
         flags[name] = enabled
     return flags
+
+
+def _read_only_stream_policy(config: dict, provider: Provider, stage: Stage) -> tuple[StreamPolicy, dict[str, object]]:
+    """Select a declared v2 timeout cell for isolated read-only work."""
+    section = config.get("timeouts")
+    if not isinstance(section, dict) or set(section) != {"read_only_size"}:
+        raise ValueError("read-only profile requires exactly timeouts.read_only_size")
+    size = section["read_only_size"]
+    if not isinstance(size, str):
+        raise ValueError("read_only_size is invalid")
+    selection = default_v2_matrix().select(provider, stage, TaskSize(size))
+    policy = StreamPolicy(**selection.policy.as_dict())
+    return policy, selection.persistable()
+
+
+def _record_read_only_timeouts(store: TaskStore, task_id: str, selections: dict[str, dict[str, object]]) -> None:
+    path = store.runs_root / task_id / "timeout-selections.json"
+    path.write_text(json.dumps({"schema_version": 1, "selections": selections}, sort_keys=True), encoding="utf-8")
 
 
 def _deepseek_options(config: dict) -> dict[str, object]:
@@ -324,15 +344,18 @@ def inspect_read_only(
         before = source_snapshot(repo)
         values = config.get("budget", {})
         budget = Budget(max_agent_calls=int(values.get("max_agent_calls", 20)), max_minutes=int(values.get("max_minutes", 60)), max_usd=float(values.get("max_usd", 0)))
+        codex_policy, codex_selection = _read_only_stream_policy(config, Provider.CODEX, Stage.VERIFY)
+        agy_policy, agy_selection = _read_only_stream_policy(config, Provider.ANTIGRAVITY, Stage.REVIEW)
         store = TaskStore(_root(data_root, allow_initialize=True))
         task = store.create_task(_spec(repo, goal, risk, acceptance, forbidden, visual_check, budget).model_copy(update={"read_only": True}))
         save_source_snapshot(store.runs_root / task.id, before)
+        _record_read_only_timeouts(store, task.id, {"codex": codex_selection, "antigravity": agy_selection})
         store.record_attestation(task.id, "live-confirmed", True)
         store.record_attestation(task.id, "billing-confirmed", True)
         orchestrator = ReadOnlyOrchestrator(
-            store, CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config, "codex"), stream_v2=stream_v2["codex"]),
-            CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config, "codex"), stream_v2=stream_v2["codex"]),
-            AntigravityAdapter(command=_profile_command(config, "antigravity"), estimated_usd=_priced(config, "antigravity"), stream_v2=stream_v2["antigravity"]),
+            store, CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config, "codex"), stream_v2=stream_v2["codex"], stream_policy=codex_policy),
+            CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config, "codex"), stream_v2=stream_v2["codex"], stream_policy=codex_policy),
+            AntigravityAdapter(command=_profile_command(config, "antigravity"), estimated_usd=_priced(config, "antigravity"), stream_v2=stream_v2["antigravity"], stream_policy=agy_policy),
             profile_digest=_profile_digest(config), source=repo, source_before=before,
         )
         state = orchestrator.run_until_blocked(task.id)
@@ -396,11 +419,13 @@ def resume(
                     raise ValueError("read-only source changed")
                 for agent in ("codex", "antigravity"):
                     _profile_command(config, agent)
+                codex_policy, _ = _read_only_stream_policy(config, Provider.CODEX, Stage.VERIFY)
+                agy_policy, _ = _read_only_stream_policy(config, Provider.ANTIGRAVITY, Stage.REVIEW)
                 orchestrator = ReadOnlyOrchestrator(
                     store,
-                    CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config, "codex"), stream_v2=stream_v2["codex"]),
-                    CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config, "codex"), stream_v2=stream_v2["codex"]),
-                    AntigravityAdapter(command=_profile_command(config, "antigravity"), estimated_usd=_priced(config, "antigravity"), stream_v2=stream_v2["antigravity"]),
+                    CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config, "codex"), stream_v2=stream_v2["codex"], stream_policy=codex_policy),
+                    CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config, "codex"), stream_v2=stream_v2["codex"], stream_policy=codex_policy),
+                    AntigravityAdapter(command=_profile_command(config, "antigravity"), estimated_usd=_priced(config, "antigravity"), stream_v2=stream_v2["antigravity"], stream_policy=agy_policy),
                     profile_digest=digest, source=source, source_before=before,
                     expected_recovery_checkpoint=recovery_checkpoint,
                 )

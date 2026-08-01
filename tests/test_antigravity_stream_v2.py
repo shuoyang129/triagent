@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
 
 from triagent.adapters.antigravity import AntigravityAdapter
 from triagent.adapters.base import AgentRequest, AgentRole, AgentStatus
-from triagent.adapters.process import ProcessResult, StreamingProcessResult
+from triagent.adapters.process import ProcessResult, StreamPolicy, StreamingProcessResult, StreamingProcessRunner
 
 
 def _request(root: Path) -> AgentRequest:
@@ -85,6 +87,76 @@ def test_agy_stream_v2_preserves_ssh_context_and_detects_terminal_before_delayed
     assert env == {"SSH_CONNECTION": "client 111 server 22"}
     assert policy.hard_timeout == 19
     assert any(stream.progress) and stream.terminal[-1] is True
+
+
+def test_agy_stream_v2_provider_output_marker_is_progress_even_when_fragmented(tmp_path: Path) -> None:
+    # The marker is emitted by the v2-owned wrapper only after it receives a
+    # provider record. `_OfflineStream` deliberately splits it across chunks.
+    marker = "TRIAGENT_AGY_PROVIDER_OUTPUT_V1"
+    stream = _OfflineStream(marker + "\n" + _payload())
+
+    result = AntigravityAdapter(
+        stream_v2=True, stream_runner=stream, command=("agy-offline",),
+        acl_verifier=lambda *_: True,
+    ).run(_request(tmp_path))
+
+    assert result.status is AgentStatus.SUCCEEDED
+    assert any(stream.progress)
+    assert stream.terminal[-1] is True
+
+
+def test_v2_agy_wrapper_emits_progress_only_for_provider_output_records(tmp_path: Path) -> None:
+    wrapper = Path(__file__).resolve().parents[1] / "scripts" / "agy-review-adapter.zsh"
+    provider = tmp_path / "fake-agy.zsh"
+    instruction = tmp_path / "instruction.txt"
+    instruction.write_text("offline wrapper test", encoding="utf-8")
+    provider.write_text(
+        "#!/usr/bin/env zsh\n"
+        "print -r -- 'provider-status: reviewing'\n"
+        f"print -r -- {_payload()!r}\n",
+        encoding="utf-8",
+    )
+    provider.chmod(0o700)
+
+    result = subprocess.run(
+        ["zsh", str(wrapper), "-p", f"Read and follow the complete instructions in this local file: {instruction}"],
+        cwd=tmp_path,
+        env={**os.environ, "AGY_BIN": str(provider)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    marker = "TRIAGENT_AGY_PROVIDER_OUTPUT_V1"
+    liveness = "TRIAGENT_AGY_LIVENESS_V1"
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count(marker) == 2
+    assert result.stdout.count(liveness) >= 1
+    assert "provider-status: reviewing" not in result.stdout
+    canonical = [line for line in result.stdout.splitlines() if line not in {marker, liveness}]
+    assert canonical == [json.dumps(json.loads(_payload()), separators=(",", ":"))]
+
+
+def test_v2_agy_liveness_does_not_refresh_idle_timeout(tmp_path: Path) -> None:
+    wrapper = Path(__file__).resolve().parents[1] / "scripts" / "agy-review-adapter.zsh"
+    provider = tmp_path / "silent-agy.zsh"
+    instruction = tmp_path / "instruction.txt"
+    instruction.write_text("offline wrapper timeout test", encoding="utf-8")
+    provider.write_text("#!/usr/bin/env zsh\nsleep 2\n", encoding="utf-8")
+    provider.chmod(0o700)
+    policy = StreamPolicy(
+        startup_timeout=0.5, idle_timeout=0.2, hard_timeout=1.0,
+        finalize_grace=0.2, terminate_grace=0.1,
+    )
+
+    result = StreamingProcessRunner().run(
+        ["zsh", str(wrapper), "-p", f"Read and follow the complete instructions in this local file: {instruction}"],
+        tmp_path, policy, {"AGY_BIN": str(provider)},
+        is_progress=lambda _stream, text: "TRIAGENT_AGY_PROVIDER_OUTPUT_V1" in text,
+    )
+
+    assert result.timed_out and result.timeout_reason == "idle-timeout"
+    assert any(event.kind.value == "liveness" for event in result.events)
 
 
 def test_agy_stream_v2_oauth_unavailable_preserves_private_diagnostics(tmp_path: Path) -> None:

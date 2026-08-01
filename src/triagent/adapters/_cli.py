@@ -294,6 +294,28 @@ def invoke_codex_jsonl(
     return AgentResult(status=AgentStatus.SUCCEEDED, data=data,actual_usd=actual)
 
 
+def parse_codex_final_message(path: Path, secret_values: Sequence[str], role: AgentRole) -> AgentResult | None:
+    """Parse a Codex ``--output-last-message`` artifact without retaining it.
+
+    The file is an officially supported final-message channel.  It is used only
+    after the JSONL event stream fails to expose a canonical message and is
+    unlinked by the adapter immediately after this function returns.
+    """
+    try:
+        message = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    message = sanitize(message, secret_values)
+    assert isinstance(message, str)
+    try:
+        payload = json.loads(message)
+        data = _canonical(role, payload)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+    actual = payload.get("actual_usd") if isinstance(payload.get("actual_usd"), (int, float)) else None
+    return AgentResult(status=AgentStatus.SUCCEEDED, data=data, actual_usd=actual)
+
+
 def _parse_codex_jsonl(process: ProcessResult | StreamingProcessResult, secret_values: Sequence[str], role: AgentRole) -> AgentResult:
     """Parse the shared Codex JSONL wire format after transport completion."""
     messages: list[str] = []

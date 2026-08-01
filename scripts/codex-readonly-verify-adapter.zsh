@@ -9,7 +9,7 @@ args=("$@")
 if [[ " ${args[*]} " != *" exec "* ]]; then
   exec "${codex_bin}" "${args[@]}"
 fi
-if [[ " ${args[*]} " != *" --sandbox read-only "* || " ${args[*]} " != *" --output-schema "* || " ${args[*]} " != *" --json "* ]]; then
+if [[ " ${args[*]} " != *" --sandbox read-only "* || " ${args[*]} " != *" --output-schema "* || " ${args[*]} " != *" --output-last-message "* || " ${args[*]} " != *" --json "* ]]; then
   print -u2 -- "TriAgent read-only Codex invocation contract rejected"
   exit 64
 fi
