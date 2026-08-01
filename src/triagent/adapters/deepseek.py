@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal
 
@@ -32,7 +32,7 @@ from triagent.adapters.base import (
     AgentStatus,
     CostEstimate,
 )
-from triagent.adapters.process import ProcessResult, ProcessRunner
+from triagent.adapters.process import ProcessResult, ProcessRunner, StreamPolicy, StreamingProcessRunner
 
 
 _ALLOWED_MODELS = frozenset(
@@ -47,6 +47,18 @@ _MIN_SMOKE_TIMEOUT_SECONDS = 1
 _MAX_SMOKE_TIMEOUT_SECONDS = 300
 
 _MAX_CANONICAL_OUTPUT_BYTES = 1_000_000
+
+
+def _compat_stream_policy(timeout_seconds: float) -> StreamPolicy:
+    """Bound opt-in stream supervision by the legacy request limit."""
+    hard = float(timeout_seconds)
+    return StreamPolicy(
+        startup_timeout=min(30.0, hard),
+        idle_timeout=hard,
+        hard_timeout=hard,
+        finalize_grace=min(60.0, hard),
+        terminate_grace=min(2.0, hard),
+    )
 
 
 DeepSeekDiagnostic = Literal[
@@ -164,6 +176,118 @@ def _failure_diagnostic(process: ProcessResult) -> DeepSeekDiagnostic:
     return "deepseek-api-failed"
 
 
+class _OpenCodeStreamClassifier:
+    """Treat only complete OpenCode JSONL records as meaningful progress."""
+
+    def __init__(self, role: AgentRole) -> None:
+        self._role = role
+        self._pending = ""
+        self._messages: list[str] = []
+        self.terminal_seen = False
+
+    def progress(self, stream: str, text: str) -> bool:
+        if stream != "stdout":
+            return False
+        self._pending += text
+        progressed = False
+        while "\n" in self._pending:
+            raw, self._pending = self._pending.split("\n", 1)
+            if not raw.strip():
+                continue
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            progressed = True
+            part = event.get("part")
+            if not (
+                event.get("type") == "text"
+                and isinstance(part, dict)
+                and part.get("type") == "text"
+                and isinstance(part.get("text"), str)
+            ):
+                continue
+            self._messages.append(part["text"])
+            for start in range(len(self._messages) - 1, -1, -1):
+                payload, diagnostic = _decode_json_object("".join(self._messages[start:]))
+                if diagnostic is not None or payload is None:
+                    continue
+                try:
+                    _canonical(self._role, payload)
+                except ValueError:
+                    continue
+                self.terminal_seen = True
+                break
+        return progressed
+
+    def terminal(self, _stream: str, _text: str) -> bool:
+        return self.terminal_seen
+
+
+def _parse_stream_output(
+    process: ProcessResult,
+    secrets: Sequence[str],
+    role: AgentRole,
+) -> AgentResult:
+    if process.timed_out:
+        return AgentResult(status=AgentStatus.TIMED_OUT, summary="OpenCode execution timed out")
+    if process.returncode != 0:
+        diagnostic = f"{process.stdout}\n{process.stderr}".lower()
+        if re.search(r"(?<!\d)(?:401|403)(?!\d)", diagnostic) or any(
+            marker in diagnostic
+            for marker in ("unauthorized", "forbidden", "not logged in", "unauthenticated", "authentication required", "login required")
+        ):
+            return AgentResult(status=AgentStatus.UNAVAILABLE, summary="OpenCode authentication or configuration is unavailable")
+        return AgentResult(status=AgentStatus.FAILED, summary="OpenCode execution failed", data={"diagnostic_code": _failure_diagnostic(process)})
+    messages: list[str] = []
+    try:
+        for raw in process.stdout.splitlines():
+            if not raw.strip():
+                continue
+            event = json.loads(raw)
+            if not isinstance(event, dict):
+                raise ValueError
+            if event.get("type") == "error":
+                return AgentResult(status=AgentStatus.FAILED, summary="OpenCode execution failed", data={"diagnostic_code": _failure_diagnostic(process)})
+            part = event.get("part")
+            if event.get("type") == "text" and isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+                messages.append(part["text"])
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="OpenCode returned malformed structured output")
+    for start in range(len(messages) - 1, -1, -1):
+        payload, diagnostic = _decode_json_object(str(sanitize("".join(messages[start:]), secrets)))
+        if diagnostic is not None or payload is None:
+            continue
+        payload = sanitize(payload, secrets)
+        assert isinstance(payload, dict)
+        try:
+            data = _canonical(role, payload)
+        except ValueError:
+            return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="OpenCode returned invalid canonical output", data={"diagnostic_code": "canonical-output-invalid"})
+        actual = payload.get("actual_usd")
+        return AgentResult(status=AgentStatus.SUCCEEDED, data=data, actual_usd=actual if isinstance(actual, (int, float)) and not isinstance(actual, bool) and math.isfinite(actual) else None)
+    return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="OpenCode returned non-JSON canonical output")
+
+
+def _invoke_stream(
+    runner: StreamingProcessRunner,
+    argv: Sequence[str],
+    cwd: Path,
+    policy: StreamPolicy,
+    env: Mapping[str, str],
+    secrets: Sequence[str],
+    role: AgentRole,
+) -> AgentResult:
+    classifier = _OpenCodeStreamClassifier(role)
+    try:
+        process = runner.run(argv, cwd, policy, env, is_progress=classifier.progress, is_terminal_result=classifier.terminal)
+    except (FileNotFoundError, OSError):
+        return AgentResult(status=AgentStatus.UNAVAILABLE, summary="OpenCode executable is unavailable")
+    return _parse_stream_output(process, secrets, role)
+
+
 def _read_private_canonical_output(
     path: Path,
     role: AgentRole,
@@ -227,6 +351,9 @@ class DeepSeekAdapter(AgentAdapter):
         runner: ProcessRunner | None = None,
         probe_dir: Path | None = None,
         smoke_timeout_seconds: float = 30,
+        stream_v2: bool = False,
+        stream_runner: StreamingProcessRunner | None = None,
+        stream_policy: StreamPolicy | None = None,
         **legacy: object,
     ) -> None:
         if legacy:
@@ -235,6 +362,8 @@ class DeepSeekAdapter(AgentAdapter):
             raise ValueError("unsupported DeepSeek model")
         if not command or any(not isinstance(part, str) or not part for part in command):
             raise ValueError("invalid OpenCode command")
+        if not isinstance(stream_v2, bool):
+            raise TypeError("stream_v2 must be a bool")
         if (
             isinstance(smoke_timeout_seconds, bool)
             or not isinstance(smoke_timeout_seconds, (int, float))
@@ -265,6 +394,11 @@ class DeepSeekAdapter(AgentAdapter):
         self._probe_dir = probe_dir
         self._smoke_timeout_seconds = float(smoke_timeout_seconds)
         self._ready_until = 0.0
+        # This migration is deliberately opt-in.  The default continues to
+        # use the frozen ProcessRunner transport, including argv and parsing.
+        self._stream_v2 = stream_v2
+        self._stream_runner = stream_runner or StreamingProcessRunner(redactions=secrets)
+        self._stream_policy = stream_policy
 
     def estimate_cost(self, request: AgentRequest | None) -> CostEstimate:
         return CostEstimate(self._estimated_usd)
@@ -471,9 +605,7 @@ class DeepSeekAdapter(AgentAdapter):
             ) as handle:
                 transport_file = Path(handle.name)
             transport_file.chmod(0o600)
-            result = invoke_opencode_jsonl(
-                self._runner,
-                [
+            argv = [
                     *self._command,
                     "run",
                     "--pure",
@@ -494,14 +626,22 @@ class DeepSeekAdapter(AgentAdapter):
                         f"{json.dumps(str(transport_file))}"
                     ),
                     f"--file={prompt_file}",
-                ],
-                request.workdir,
-                request.timeout_seconds,
-                self._env,
-                self._secrets,
-                request.role,
-                _failure_diagnostic,
-            )
+                ]
+            if self._stream_v2:
+                result = _invoke_stream(
+                    self._stream_runner,
+                    argv,
+                    request.workdir,
+                    self._stream_policy or _compat_stream_policy(request.timeout_seconds),
+                    self._env,
+                    self._secrets,
+                    request.role,
+                )
+            else:
+                result = invoke_opencode_jsonl(
+                    self._runner, argv, request.workdir, request.timeout_seconds,
+                    self._env, self._secrets, request.role, _failure_diagnostic,
+                )
             changed_paths = result.data.get("changed_paths")
             legacy_output_file_declared = (
                 isinstance(changed_paths, list)
