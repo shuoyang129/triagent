@@ -138,6 +138,9 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
    && "${contract}" == *"scripts/collect_g1_sonic_minimal_motion.py"* ) \
    || ( "${contract}" == *"M39 physical G1 repair review"* \
    && "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
+   && "${contract}" == *"tests/test_m39_minimal_motion_adapter.py"* ) \
+   || ( "${contract}" == *"M39 physical restore repair"* \
+   && "${contract}" == *"scripts/m39_minimal_motion_adapter.py"* \
    && "${contract}" == *"tests/test_m39_minimal_motion_adapter.py"* ) ]]; then
   test_scope="m39-exact-89-283-15"
   test_status=0
