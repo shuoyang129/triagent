@@ -311,6 +311,10 @@ def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
         "M39 physical restore repair final pre-active review"
         in route_condition
     )
+    assert (
+        "Repair M39 after physical expiry run v23 failed safely before active motion"
+        in route_condition
+    )
     for required in (
         "tests/test_m39_minimal_motion_adapter.py",
         "services/g1_telemetry/sonic_minimal_motion.py",
@@ -321,7 +325,7 @@ def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
     ):
         assert required in route_condition
 
-    m39_body = text.split('test_scope="m39-exact-127-321-15"', 1)[1].split(
+    m39_body = text.split('test_scope="m39-exact-134-328-15"', 1)[1].split(
         'elif [[ "${contract}" == *"tests/test_g1_sonic_zero_command_takeover.py"*',
         1,
     )[0]
@@ -339,14 +343,14 @@ def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
         "scripts/m39_restore_mode_recovery.py",
         "scripts/collect_g1_sonic_minimal_motion.py",
         "configs/g1_sonic_minimal_motion_policy.json",
-        "127 passed",
-        "321 passed, 18 subtests passed",
+        "134 passed",
+        "328 passed, 18 subtests passed",
         "15 passed",
         "dd888cfb4216067a7b24bff1f9ba01909b7335c821b94112d384fb77ba897d69",
         "4083b391964332e77b63306d4f2672bbba23436f3defb681cb22e75246564213",
         "M39_MATERIALIZER_EXIT_STATUS=",
         "docs/evidence/m39_sonic_minimal_motion_contract.png",
-        "62b3682fa70689695dc83d18eccbcf358aa6f447d92391988f06916706966632",
+        "49139ced015dae44244d8c876cb2aa1d2ecb643713cb0abb6f88bbe7bf57b4dd",
         "PNG image data, 1200 x 800, 8-bit/color RGB, non-interlaced",
         "M39_VISUAL_ARTIFACT_PATH=",
         "M39_PNG_EXPECTED_SHA256=",
