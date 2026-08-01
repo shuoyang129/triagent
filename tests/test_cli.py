@@ -86,6 +86,7 @@ def test_resume_cli_preserves_task_id_and_reaches_approval(tmp_path: Path) -> No
         task.id, mode="simulation", implementer="fake", verifier="fake",
         reviewer="fake", profile_digest="fake-v1",
     )
+    store.record_runtime_manifest(task.id, cli_module._fake_runtime_manifest())
     store.transition_recoverable(task.id, TaskState.SPEC, "implement", "test")
 
     result = runner.invoke(app, [

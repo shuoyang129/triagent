@@ -163,6 +163,17 @@ class TaskStore:
             connection.execute("CREATE TABLE IF NOT EXISTS approval_requests_versions(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, PRIMARY KEY(task_id,action,resource_json))")
             connection.execute("CREATE TABLE IF NOT EXISTS system_attestations(task_id TEXT NOT NULL, name TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(task_id,name))")
             connection.execute("CREATE TABLE IF NOT EXISTS execution_provenance(task_id TEXT PRIMARY KEY, mode TEXT NOT NULL, implementer TEXT NOT NULL, verifier TEXT NOT NULL, reviewer TEXT NOT NULL, profile_digest TEXT NOT NULL)")
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS runtime_manifests("
+                "task_id TEXT PRIMARY KEY, manifest_json TEXT NOT NULL, digest TEXT NOT NULL)"
+            )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS durable_completions("
+                "task_id TEXT NOT NULL, call_id TEXT NOT NULL, provider TEXT NOT NULL, "
+                "role TEXT NOT NULL, result_digest TEXT NOT NULL, candidate_commit TEXT NOT NULL, "
+                "outcome_json TEXT NOT NULL, consumed_at TEXT NOT NULL, "
+                "PRIMARY KEY(task_id, call_id))"
+            )
             connection.execute("CREATE TABLE IF NOT EXISTS recovery_checkpoints(task_id TEXT PRIMARY KEY, stage TEXT NOT NULL, sequence INTEGER NOT NULL, updated_at TEXT NOT NULL)")
             connection.execute("CREATE TABLE IF NOT EXISTS attention_items(task_id TEXT NOT NULL, code TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(task_id,code))")
             connection.execute("CREATE TABLE IF NOT EXISTS consumed_actions(task_id TEXT NOT NULL, action TEXT NOT NULL, resource_json TEXT NOT NULL, consumed_at TEXT NOT NULL, PRIMARY KEY(task_id,action))")
@@ -186,6 +197,152 @@ class TaskStore:
             connection.execute("INSERT INTO task_runtime(task_id) VALUES (?)", (task_id,))
         layout.append_event({"at": timestamp, "event": "created", "state": TaskState.SPEC.value})
         return StoredTask(task_id, spec, TaskState.SPEC)
+
+    @staticmethod
+    def _canonical_runtime_manifest(manifest: dict[str, object]) -> tuple[str, str]:
+        """Canonicalize a non-secret manifest before its one-time persistence."""
+        if not isinstance(manifest, dict):
+            raise ValueError("runtime manifest must be an object")
+        try:
+            encoded = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        except (TypeError, ValueError) as error:
+            raise ValueError("runtime manifest is not JSON serializable") from error
+        return encoded, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def record_runtime_manifest(self, task_id: str, manifest: dict[str, object]) -> str:
+        """Persist a task's runtime identity exactly once; equal retries are safe."""
+        encoded, manifest_digest = self._canonical_runtime_manifest(manifest)
+        with self._connect() as connection:
+            if connection.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone() is None:
+                raise KeyError(task_id)
+            existing = connection.execute(
+                "SELECT manifest_json, digest FROM runtime_manifests WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if existing is not None:
+                if existing["manifest_json"] != encoded or existing["digest"] != manifest_digest:
+                    raise ValueError("runtime manifest is immutable")
+                return manifest_digest
+            connection.execute(
+                "INSERT INTO runtime_manifests(task_id, manifest_json, digest) VALUES (?, ?, ?)",
+                (task_id, encoded, manifest_digest),
+            )
+        return manifest_digest
+
+    def runtime_manifest(self, task_id: str) -> dict[str, object] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT manifest_json FROM runtime_manifests WHERE task_id=?", (task_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        value = json.loads(row["manifest_json"])
+        if not isinstance(value, dict):
+            raise ValueError("stored runtime manifest is invalid")
+        return value
+
+    @staticmethod
+    def _canonical_durable_outcome(outcome: dict[str, object]) -> str:
+        if not isinstance(outcome, dict):
+            raise ValueError("durable completion outcome must be an object")
+        try:
+            return json.dumps(outcome, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        except (TypeError, ValueError) as error:
+            raise ValueError("durable completion outcome is not JSON serializable") from error
+
+    def record_durable_completion(
+        self,
+        *,
+        task_id: str,
+        call_id: str,
+        provider: str,
+        role: str,
+        result_digest: str,
+        candidate_commit: str,
+        outcome: dict[str, object],
+        lease_owner: str,
+    ) -> bool:
+        """Commit a validated v2 completion once while the controller owns it.
+
+        The filesystem receipt is deliberately written *after* this SQLite
+        transaction.  Therefore a process crash in that gap is safe: recovery
+        can retry the exact record, receive ``False``, and write only the
+        missing receipt without another provider invocation.
+        """
+        if not isinstance(lease_owner, str) or not lease_owner:
+            raise LeaseConflict("controller lease is required")
+        if not isinstance(provider, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", provider):
+            raise ValueError("durable completion provider is invalid")
+        if role not in {"implementer", "verifier", "reviewer"}:
+            raise ValueError("durable completion role is invalid")
+        if not isinstance(result_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", result_digest):
+            raise ValueError("durable completion result digest is invalid")
+        if not isinstance(candidate_commit, str) or not re.fullmatch(r"[0-9a-f]{40,64}", candidate_commit):
+            raise ValueError("durable completion candidate commit is invalid")
+        outcome_json = self._canonical_durable_outcome(outcome)
+        timestamp = datetime.now(UTC).isoformat()
+        connection = self._connect()
+        try:
+            import time
+            connection.execute("BEGIN IMMEDIATE")
+            runtime = connection.execute(
+                "SELECT lease_owner, lease_until FROM task_runtime WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if runtime is None:
+                raise KeyError(task_id)
+            if (
+                runtime["lease_owner"] != lease_owner
+                or runtime["lease_until"] is None
+                or runtime["lease_until"] < time.time()
+            ):
+                raise LeaseConflict("controller lease is not owned")
+            call = connection.execute(
+                "SELECT status FROM agent_calls WHERE id=? AND task_id=?", (call_id, task_id)
+            ).fetchone()
+            if call is None or call["status"] != "completed":
+                raise StateConflict("durable completion call is not completed")
+            existing = connection.execute(
+                "SELECT provider,role,result_digest,candidate_commit,outcome_json "
+                "FROM durable_completions WHERE task_id=? AND call_id=?", (task_id, call_id)
+            ).fetchone()
+            expected = (provider, role, result_digest, candidate_commit, outcome_json)
+            if existing is not None:
+                actual = tuple(existing[key] for key in (
+                    "provider", "role", "result_digest", "candidate_commit", "outcome_json"
+                ))
+                if actual != expected:
+                    raise StateConflict("durable completion conflicts with existing record")
+                connection.commit()
+                return False
+            connection.execute(
+                "INSERT INTO durable_completions("
+                "task_id,call_id,provider,role,result_digest,candidate_commit,outcome_json,consumed_at"
+                ") VALUES(?,?,?,?,?,?,?,?)",
+                (task_id, call_id, provider, role, result_digest, candidate_commit, outcome_json, timestamp),
+            )
+            connection.commit()
+            return True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def durable_completion(self, task_id: str, call_id: str) -> dict[str, object] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT provider,role,result_digest,candidate_commit,outcome_json "
+                "FROM durable_completions WHERE task_id=? AND call_id=?", (task_id, call_id)
+            ).fetchone()
+        if row is None:
+            return None
+        outcome = json.loads(row["outcome_json"])
+        if not isinstance(outcome, dict):
+            raise StateConflict("stored durable completion is invalid")
+        return {
+            "provider": row["provider"], "role": row["role"],
+            "result_digest": row["result_digest"], "candidate_commit": row["candidate_commit"],
+            "outcome": outcome,
+        }
 
     def load(self, task_id: str) -> StoredTask:
         with self._connect() as connection:

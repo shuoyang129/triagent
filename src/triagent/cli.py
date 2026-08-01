@@ -24,6 +24,11 @@ from triagent.report import render_persisted_report
 from triagent.router import ImplementationRouter
 from triagent.runtime import DataRootError, resolve_v2_data_root
 from triagent.runtime_config import RuntimeConfigError, load_runtime_config
+from triagent.runtime_manifest import (
+    RuntimeManifestError,
+    build_runtime_manifest,
+    compare_manifests,
+)
 from triagent.store import TaskStore
 from triagent import __version__
 
@@ -129,6 +134,25 @@ def _profile_digest(config: dict) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def _fake_runtime_manifest() -> dict[str, object]:
+    """Build a declared Fake binding without probing or constructing a provider."""
+    return build_runtime_manifest(
+        profile_digest=hashlib.sha256(b"triagent-v2-fake-profile").hexdigest(),
+        providers={
+            role: ("fake", ("fake",), None, "declared-fake")
+            for role in ("implementer", "verifier", "reviewer")
+        },
+    )
+
+
+def _require_matching_fake_runtime_manifest(store: TaskStore, task_id: str) -> None:
+    recorded = store.runtime_manifest(task_id)
+    if recorded is None:
+        raise ValueError("runtime manifest unavailable")
+    if compare_manifests(recorded, _fake_runtime_manifest()):
+        raise ValueError("runtime manifest incompatible")
+
+
 def _require_provenance(store: TaskStore, task_id: str, expected: dict[str, str]) -> dict[str, str]:
     persisted = store.execution_provenance(task_id)
     if persisted is None or persisted != expected:
@@ -203,6 +227,10 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
         store = TaskStore(_root(data_root, allow_initialize=True)); task = store.create_task(
             _spec(repo, goal, risk, acceptance, forbidden, visual_check, budget)
         )
+        # Only Fake is recorded here.  This construction is pure data and cannot
+        # discover a provider; live runtime binding remains a later gated step.
+        if profile == "fake":
+            store.record_runtime_manifest(task.id, _fake_runtime_manifest())
     except Exception:
         raise typer.BadParameter("task creation failed") from None
     run_worktree = store.runs_root / task.id / "worktree"
@@ -265,6 +293,7 @@ def resume(
                 "reviewer": "fake", "profile_digest": "fake-v1",
             }
             _require_provenance(store, task_id, expected)
+            _require_matching_fake_runtime_manifest(store, task_id)
             success = AgentResult(
                 status=AgentStatus.SUCCEEDED,
                 data={"status": "passed", "summary_code": "completed", "evidence": []},
@@ -386,12 +415,29 @@ def report_command(task_id: str, data_root: DataRoot = None) -> None:
 def doctor(
     profile: Annotated[str, typer.Option()] = "fake",
     resolved: Annotated[bool, typer.Option("--resolved", help="Show non-secret runtime bindings.")] = False,
+    compare: Annotated[str | None, typer.Option("--compare", help="Compare a task runtime manifest without probing providers.")] = None,
+    data_root: DataRoot = None,
 ) -> None:
     if resolved:
         try:
             typer.echo("\n".join(load_runtime_config().doctor_lines()))
         except RuntimeConfigError as error:
             raise typer.BadParameter(str(error)) from error
+    if compare is not None:
+        if profile != "fake":
+            raise typer.BadParameter("--compare currently supports only --profile fake")
+        try:
+            recorded = TaskStore(_root(data_root)).runtime_manifest(compare)
+            if recorded is None:
+                raise ValueError("runtime manifest unavailable")
+            fields = compare_manifests(recorded, _fake_runtime_manifest())
+        except (DataRootError, RuntimeManifestError, RuntimeConfigError, ValueError) as error:
+            raise typer.BadParameter("runtime manifest comparison unavailable") from error
+        if fields:
+            typer.echo("Runtime manifest drift: " + ", ".join(fields))
+            raise typer.Exit(2)
+        typer.echo("Runtime manifest: compatible")
+        return
     if profile == "fake":
         typer.echo("Fake: ready (no vendor calls)")
         return
