@@ -4,6 +4,9 @@ import pytest
 
 from triagent.adapters.base import AgentResult, AgentRole, AgentStatus
 from triagent.adapters.fake import FakeAgent
+from triagent.adapters.cursor import CursorAdapter
+from triagent.adapters.codex import CodexAdapter
+from triagent.adapters.antigravity import AntigravityAdapter
 from triagent.domain import Budget, RiskLevel, TaskSpec, TaskState
 from triagent.orchestrator import Orchestrator
 from triagent.store import LeaseConflict, TaskStore
@@ -264,3 +267,78 @@ def test_failed_agent_call_persists_only_allowlisted_diagnostic_code(
             (task.id,),
         ).fetchone()
     assert row["diagnostic"] == diagnostic_code
+
+
+@pytest.mark.parametrize(
+    ("adapter_name", "role", "stage", "schema"),
+    [
+        ("codex", AgentRole.VERIFIER, TaskState.VERIFY, "verification-result-v1"),
+        ("antigravity", AgentRole.REVIEWER, TaskState.REVIEW, "review-result-v1"),
+    ],
+)
+def test_live_review_durable_result_recovers_after_crash_without_second_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, adapter_name: str, role: AgentRole,
+    stage: TaskState, schema: str,
+) -> None:
+    """A persisted real verifier/reviewer result is consumed after restart, not rerun."""
+    store = TaskStore(tmp_path / "data")
+    task = store.create_task(TaskSpec(
+        goal="live durable verifier", scope=[str(tmp_path)], acceptance=["offline"],
+        budget=Budget(max_agent_calls=4, max_minutes=60, max_usd=10),
+    ))
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    store.set_workspace(task.id, str(worktree), "a" * 40, "triagent/test")
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE workspace_meta SET reviewed_commit=?, candidate_ref=? WHERE task_id=?",
+            ("b" * 40, "refs/triagent/reviewed/test", task.id),
+        )
+    (store.runs_root / task.id / "handoff.json").write_text("{}", encoding="utf-8")
+    store.record_runtime_manifest(task.id, {"runtime": "live-v2-test"})
+    store.transition(task.id, TaskState.SPEC, TaskState.IMPLEMENT, "test")
+    store.transition(task.id, TaskState.IMPLEMENT, TaskState.VERIFY, "test")
+
+    implementer = CursorAdapter(estimated_usd=1.0)
+    verifier = CodexAdapter(estimated_usd=1.0)
+    reviewer = AntigravityAdapter(estimated_usd=1.0)
+    calls: list[str] = []
+
+    def successful_verification(_request):
+        calls.append(adapter_name)
+        return AgentResult(
+            status=AgentStatus.SUCCEEDED,
+            data={"status": "passed", "evidence": ["offline-proof"], "artifacts": [], "findings": []},
+            actual_usd=1.0,
+        )
+
+    adapter = verifier if adapter_name == "codex" else reviewer
+    monkeypatch.setattr(adapter, "run", successful_verification)
+    first = Orchestrator(store, implementer, verifier, reviewer, profile_digest="c" * 64)
+    owner = "owner-first"
+    store.acquire_lease(task.id, owner, 600)
+    first._lease_owner = owner
+    original = store.record_durable_completion
+
+    def crash_after_atomic_commit(**kwargs):
+        original(**kwargs)
+        raise RuntimeError("injected crash after durable commit")
+
+    monkeypatch.setattr(store, "record_durable_completion", crash_after_atomic_commit)
+    request = first._request(task.id, role, schema, adapter)
+    assert first._durable_context(task.id, stage, adapter, request) is not None
+    with pytest.raises(RuntimeError, match="durable commit"):
+        first._call(task.id, stage, adapter, request)
+    assert calls == [adapter_name]
+    store.release_lease(task.id, owner)
+
+    monkeypatch.setattr(store, "record_durable_completion", original)
+    restarted = Orchestrator(store, implementer, verifier, reviewer, profile_digest="c" * 64)
+    resumed_owner = "owner-restarted"
+    store.acquire_lease(task.id, resumed_owner, 600)
+    restarted._lease_owner = resumed_owner
+    replayed = restarted._call(task.id, stage, adapter, request)
+
+    assert replayed is not None and replayed.data["evidence"] == ["offline-proof"]
+    assert calls == [adapter_name]
+    assert store.runtime(task.id).completed_calls == 1

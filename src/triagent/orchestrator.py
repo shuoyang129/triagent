@@ -6,7 +6,7 @@ import uuid
 import json
 import hashlib
 
-from triagent.adapters.base import AgentAdapter, AgentRequest, AgentRole, AgentStatus
+from triagent.adapters.base import AgentAdapter, AgentRequest, AgentResult, AgentRole, AgentStatus
 from triagent.domain import ReviewSeverity, RiskLevel, StageOutcome, TaskState
 from triagent.store import BudgetExceeded, LeaseConflict, TaskStore
 from triagent.adapters.cursor import CursorAdapter
@@ -14,7 +14,10 @@ from triagent.adapters.codex import CodexAdapter
 from triagent.adapters.antigravity import AntigravityAdapter
 from triagent.adapters.deepseek import DeepSeekAdapter
 from triagent.adapters.fake import FakeAgent
-from triagent.completion import CompletionControl, DurableResult
+from triagent.completion import (
+    CompletionAlreadyConsumed, CompletionBinding, CompletionControl, CompletionError,
+    DurableResult, _digest, find_recoverable_result,
+)
 
 _TRUSTED={CursorAdapter:("cursor",frozenset({AgentRole.IMPLEMENTER})),CodexAdapter:("codex",frozenset({AgentRole.VERIFIER})),AntigravityAdapter:("antigravity",frozenset({AgentRole.REVIEWER})),DeepSeekAdapter:("deepseek",frozenset({AgentRole.IMPLEMENTER}))}
 _SAFE_DIAGNOSTICS=frozenset({
@@ -185,6 +188,74 @@ class Orchestrator:
             timeout_seconds=timeout_seconds,
         )
 
+    def _durable_context(self, task_id: str, state: TaskState, adapter: AgentAdapter, request: AgentRequest, call_id: str | None = None):
+        """Return the exact v2 durable binding for live review calls, if enabled."""
+        identity, _ = _contract(adapter)
+        if (
+            request.role not in {AgentRole.VERIFIER, AgentRole.REVIEWER}
+            or identity not in {"codex", "antigravity"}
+            or self.profile_digest is None
+        ):
+            return None
+        runtime_digest = self.store.runtime_manifest_digest(task_id)
+        workspace = self.store.workspace(task_id)
+        if runtime_digest is None or workspace is None or not workspace["reviewed_commit"]:
+            return None
+        candidate_commit = workspace["reviewed_commit"]
+        input_manifest = {
+            "schema_version": 1, "state": state.value, "role": request.role.value,
+            "provider": identity, "output_schema": request.output_schema,
+            "task_sha256": hashlib.sha256(request.task_file.read_bytes()).hexdigest(),
+            "handoff_sha256": hashlib.sha256(request.handoff_file.read_bytes()).hexdigest() if request.handoff_file else None,
+            "candidate_commit": candidate_commit,
+        }
+        input_digest = _digest(input_manifest)
+        if call_id is None:
+            return input_manifest, input_digest, runtime_digest, candidate_commit
+        binding = CompletionBinding(
+            task_id=task_id, call_id=call_id, provider=identity, role=request.role.value,
+            input_digest=input_digest, profile_digest=self.profile_digest,
+            runtime_manifest_digest=runtime_digest,
+        )
+        return CompletionControl(self.store.runs_root, binding, request.workdir), input_manifest, candidate_commit
+
+    def _recover_durable_result(self, task_id: str, state: TaskState, adapter: AgentAdapter, request: AgentRequest):
+        context = self._durable_context(task_id, state, adapter, request)
+        if context is None:
+            return None
+        _, input_digest, runtime_digest, candidate_commit = context
+        identity, _ = _contract(adapter)
+        found = find_recoverable_result(
+            self.store.runs_root, task_id=task_id, provider=identity, role=request.role.value,
+            profile_digest=self.profile_digest, runtime_manifest_digest=runtime_digest,
+            candidate_commit=candidate_commit, provider_worktree=request.workdir, input_digest=input_digest,
+        )
+        if found is None:
+            return None
+        control, record = found
+        outcome = dict(record.outcome)
+        actual = outcome.get("actual_usd")
+        if isinstance(actual, bool) or (actual is not None and not isinstance(actual, (int, float))):
+            raise CompletionError("durable completion actual cost is invalid")
+        replay = AgentResult(status=AgentStatus.SUCCEEDED, data=outcome, actual_usd=actual)
+        self._outcome(self._failed_stage(request.role), replay, status="failed" if outcome.get("status") == "failed" else "passed")
+
+        def persist() -> None:
+            self.store.record_durable_completion(
+                task_id=task_id, call_id=record.binding.call_id, provider=identity, role=request.role.value,
+                result_digest=record.result_digest, candidate_commit=candidate_commit, outcome=outcome,
+                lease_owner=self._lease_owner or "", actual_usd=actual,
+            )
+
+        try:
+            control.consume_once(expected_candidate_commit=candidate_commit, before_receipt=persist)
+        except CompletionAlreadyConsumed:
+            ledger = self.store.durable_completion(task_id, record.binding.call_id)
+            expected = {"provider": identity, "role": request.role.value, "result_digest": record.result_digest, "candidate_commit": candidate_commit, "outcome": outcome}
+            if ledger != expected:
+                raise CompletionError("consumed completion ledger is missing or mismatched")
+        return replay
+
     def _call(
         self,
         task_id: str,
@@ -196,6 +267,9 @@ class Orchestrator:
         accept_completed_failure: bool = False,
     ):
         task = self.store.load(task_id)
+        recovered = self._recover_durable_result(task_id, state, adapter, request)
+        if recovered is not None:
+            return recovered
         identity,roles=_contract(adapter)
         if request.role not in roles or request.agent_identity != identity:
             raise ValueError("adapter identity/role mismatch")
@@ -213,6 +287,11 @@ class Orchestrator:
         except BudgetExceeded:
             self.store.transition(task_id, state, TaskState.PAUSED_BUDGET, "agent-call-budget-exhausted")
             return None
+        durable = self._durable_context(task_id, state, adapter, request, call_id)
+        if durable is not None:
+            control, input_manifest, candidate_commit = durable
+            control.write_input_manifest(input_manifest)
+            control.append_event({"event": "provider-started"})
         try: result = adapter.run(request)
         except BaseException:
             diagnostic = "adapter-exception"
@@ -225,6 +304,27 @@ class Orchestrator:
         if self._lease_owner:
             self.store.renew_lease(task_id, self._lease_owner, lease_seconds)
         actual = 0.0 if estimate.zero_cost_enforced else result.actual_usd
+        if durable is not None and result.status is AgentStatus.SUCCEEDED:
+            outcome = dict(result.data)
+            self._outcome(self._failed_stage(request.role), result, status="failed" if outcome.get("status") == "failed" else "passed")
+            control.heartbeat({"meaningful_progress": True, "event": "provider-result-validated"})
+            record = control.write_result(candidate_commit=candidate_commit, outcome=outcome)
+
+            def persist() -> None:
+                self.store.record_durable_completion(
+                    task_id=task_id, call_id=call_id, provider=identity, role=request.role.value,
+                    result_digest=record.result_digest, candidate_commit=candidate_commit, outcome=outcome,
+                    lease_owner=self._lease_owner or "", actual_usd=actual,
+                )
+
+            try:
+                control.consume_once(expected_candidate_commit=candidate_commit, before_receipt=persist)
+            except CompletionAlreadyConsumed:
+                ledger = self.store.durable_completion(task_id, call_id)
+                expected = {"provider": identity, "role": request.role.value, "result_digest": record.result_digest, "candidate_commit": candidate_commit, "outcome": outcome}
+                if ledger != expected:
+                    raise CompletionError("consumed completion ledger is missing or mismatched")
+            return result
         raw_diagnostic=result.data.get("diagnostic_code")
         diagnostic=raw_diagnostic if isinstance(raw_diagnostic,str) and raw_diagnostic in _SAFE_DIAGNOSTICS else (result.status.value if result.status is not AgentStatus.SUCCEEDED else "")
         try: self.store.complete_agent_call(task_id, call_id, actual, diagnostic)
@@ -469,12 +569,14 @@ class Orchestrator:
             if runtime.repair_attempts >= self._repair_limit(task.spec.risk):
                 raise ValueError("repair-attempt limit exhausted")
             request = self._request(task_id, role, schema, adapter)
+            recovered = self._recover_durable_result(task_id, target, adapter, request)
             estimate = adapter.estimate_cost(request)
-            if estimate.estimated_usd == 0 and not estimate.zero_cost_enforced:
-                raise BudgetExceeded("zero estimate is not enforced")
-            self.store.assert_agent_call_available(
-                task_id, estimate.estimated_usd, lease_owner=owner
-            )
+            if recovered is None:
+                if estimate.estimated_usd == 0 and not estimate.zero_cost_enforced:
+                    raise BudgetExceeded("zero estimate is not enforced")
+                self.store.assert_agent_call_available(
+                    task_id, estimate.estimated_usd, lease_owner=owner
+                )
             if stage in {"verify", "review"} and self.store.workspace(task_id) is not None:
                 self.store.restore_candidate_worktree(task_id)
             if stage == "implement" and type(self.implementer) is DeepSeekAdapter:

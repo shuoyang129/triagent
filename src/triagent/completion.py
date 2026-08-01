@@ -354,6 +354,7 @@ def find_recoverable_result(
     runtime_manifest_digest: str,
     candidate_commit: str,
     provider_worktree: Path,
+    input_digest: str | None = None,
 ) -> tuple[CompletionControl, DurableResult] | None:
     """Locate one valid durable result for an exact controller binding."""
     task_root = Path(runs_root).resolve(strict=True) / task_id
@@ -382,6 +383,7 @@ def find_recoverable_result(
             or binding.role != role
             or binding.profile_digest != profile_digest
             or binding.runtime_manifest_digest != runtime_manifest_digest
+            or (input_digest is not None and binding.input_digest != input_digest)
         ):
             continue
         control = CompletionControl(Path(runs_root), binding, provider_worktree)

@@ -207,11 +207,22 @@ def _fake_runtime_manifest() -> dict[str, object]:
     """Build a declared Fake binding without probing or constructing a provider."""
     return build_runtime_manifest(
         profile_digest=hashlib.sha256(b"triagent-v2-fake-profile").hexdigest(),
+        providers={role: ("fake", ("fake",), None, "declared-fake") for role in ("implementer", "verifier", "reviewer")},
+    )
+
+def _live_runtime_manifest(config: dict, *, profile_digest: str, implementer: str) -> dict[str, object]:
+    """Build the immutable live binding without probing a provider."""
+    if implementer not in {"cursor", "deepseek"}:
+        raise ValueError("live implementer is invalid")
+    return build_runtime_manifest(
+        profile_digest=profile_digest,
         providers={
-            role: ("fake", ("fake",), None, "declared-fake")
-            for role in ("implementer", "verifier", "reviewer")
+            "implementer": (implementer, _profile_command(config, implementer), _deepseek_options(config)["model"] if implementer == "deepseek" else None, None),
+            "verifier": ("codex", _profile_command(config, "codex"), None, None),
+            "reviewer": ("antigravity", _profile_command(config, "antigravity"), None, None),
         },
     )
+
 
 
 def _require_matching_fake_runtime_manifest(store: TaskStore, task_id: str) -> None:
@@ -327,6 +338,7 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
                 if not deepseek_caps.available:
                     setup_diagnostic = deepseek_caps.diagnostic_code or "deepseek-api-failed"
             choice = ImplementationRouter().choose(cursor_usage=0.0, capabilities=capabilities)
+            store.record_runtime_manifest(task.id, _live_runtime_manifest(config, profile_digest=_profile_digest(config), implementer=choice.name))
             orchestrator = Orchestrator(
                 store, cursor if choice.name == "cursor" else deepseek, codex, antigravity,
                 profile_digest=_profile_digest(config),
@@ -491,6 +503,9 @@ def resume(
                         raise ValueError("invalid fallback probe estimate")
             else:
                 raise ValueError("persisted implementer is unavailable")
+            recorded_manifest = store.runtime_manifest(task_id)
+            if recorded_manifest is not None and compare_manifests(recorded_manifest, _live_runtime_manifest(config, profile_digest=digest, implementer=persisted["implementer"])):
+                raise ValueError("runtime manifest incompatible")
             orchestrator = Orchestrator(
                 store,
                 implementer,

@@ -240,6 +240,19 @@ class TaskStore:
             raise ValueError("stored runtime manifest is invalid")
         return value
 
+    def runtime_manifest_digest(self, task_id: str) -> str | None:
+        """Return the immutable digest recorded with a task runtime manifest."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT digest FROM runtime_manifests WHERE task_id=?", (task_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        digest = row["digest"]
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("stored runtime manifest digest is invalid")
+        return digest
+
     @staticmethod
     def _canonical_durable_outcome(outcome: dict[str, object]) -> str:
         if not isinstance(outcome, dict):
