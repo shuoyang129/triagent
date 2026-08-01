@@ -558,7 +558,7 @@ class TaskStore:
             "profile_digest": profile_digest,
         }
         valid = (
-            mode in {"simulation", "live"}
+            mode in {"simulation", "live", "read-only"}
             and isinstance(profile_digest, str)
             and 0 < len(profile_digest) <= 128
             and (
@@ -569,6 +569,7 @@ class TaskStore:
                     and verifier == "codex"
                     and reviewer == "antigravity"
                 )
+                or (mode == "read-only" and implementer == "none" and verifier == "codex" and reviewer == "antigravity")
             )
         )
         if not valid:

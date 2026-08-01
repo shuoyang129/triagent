@@ -73,6 +73,7 @@ class TaskSpec(BaseModel):
     visual_check: Literal["required", "optional", "none"] = "none"
     forbidden: list[str] = Field(default_factory=list)
     budget: Budget = Field(default_factory=Budget)
+    read_only: bool = False
 
     @model_validator(mode="after")
     def enforce_robot_visual_check(self) -> TaskSpec:

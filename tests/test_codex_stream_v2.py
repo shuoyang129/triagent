@@ -89,6 +89,19 @@ def test_codex_stream_v2_uses_same_jsonl_wire_contract_with_offline_fake(tmp_pat
     assert any(stream.progress) and stream.terminal[-1] is True
 
 
+def test_codex_read_only_request_uses_read_only_sandbox(tmp_path: Path) -> None:
+    stream = _FakeStreamingRunner(_jsonl({"status": "passed", "evidence": [], "artifacts": []}))
+    result = CodexAdapter(stream_v2=True, stream_runner=stream, command=("codex-offline",)).run(_request(tmp_path).model_copy(update={"read_only": True}))
+    assert result.status is AgentStatus.SUCCEEDED
+    argv = stream.calls[0][0]
+    assert argv[3] == "read-only"
+    assert "--output-schema" in argv
+    schema_path = Path(argv[argv.index("--output-schema") + 1])
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert schema["required"] == ["status", "evidence", "artifacts"]
+    assert "actual_usd" not in schema["properties"]
+
+
 def test_codex_stream_v2_rejects_malformed_jsonl_without_legacy_fallback(tmp_path: Path) -> None:
     stream = _FakeStreamingRunner('{"type":"thread.started"}\nnot-json\n')
 

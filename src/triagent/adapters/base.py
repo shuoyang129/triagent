@@ -57,6 +57,7 @@ class AgentRequest(BaseModel):
     workdir: Path
     output_schema: str = Field(min_length=1)
     timeout_seconds: float = Field(gt=0)
+    read_only: bool = False
 
 
 class AgentResult(BaseModel):

@@ -58,20 +58,12 @@ def read_prompt(request) -> tuple[str | None, AgentResult | None]:
             AgentRole.VERIFIER:"verify the supplied implementation and produce verification evidence",
             AgentRole.REVIEWER:"independently review the supplied implementation and report findings",
         }[role]
-        properties={
-            "status":{"type":"string","enum":["passed","failed"]},
-            "evidence":{"type":"array","items":{"type":"string"},"maxItems":50},
-            "artifacts":{"type":"array","items":{"type":"string"},"maxItems":50},
-            "actual_usd":{"type":["number","null"],"minimum":0},
-        }
-        required=["status","evidence","artifacts"]
-        if role is AgentRole.IMPLEMENTER:
-            properties["changed_paths"]={"type":"array","maxItems":10000,"items":{"type":"string","minLength":1,"maxLength":1024}}
-            required.append("changed_paths")
-        if role is AgentRole.REVIEWER:
-            properties["findings"]={"type":"array","maxItems":50,"items":{"type":"object","additionalProperties":False,"required":["severity","code","message"],"properties":{"severity":{"type":"string","enum":["BLOCKER","MAJOR","MINOR","NOTE"]},"code":{"type":"string","minLength":1,"maxLength":100},"message":{"type":"string","minLength":1,"maxLength":500}}}}
-            required.append("findings")
-        schema=json.dumps({"type":"object","additionalProperties":False,"required":required,"properties":properties},sort_keys=True,separators=(",",":"))
+        if request.read_only:
+            operation={
+                AgentRole.VERIFIER:"perform a strictly read-only static inspection of the supplied repository evidence; do not treat the absence of a candidate implementation as a failure, and return passed when inspection completes",
+                AgentRole.REVIEWER:"independently perform a strictly read-only review of the supplied repository evidence and report findings; do not treat the absence of a candidate implementation as a failure",
+            }[role]
+        schema=json.dumps(canonical_output_schema(role),sort_keys=True,separators=(",",":"))
         authoritative_workdir=json.dumps(str(request.workdir.resolve()),ensure_ascii=False)
         header=(
             "TRIAGENT_CONTROLLER_PROMPT_V2\n"
@@ -80,14 +72,32 @@ def read_prompt(request) -> tuple[str | None, AgentResult | None]:
             f"AUTHORITATIVE_WORKDIR_JSON={authoritative_workdir}\n"
             "WORKDIR_RULE=Run every repository inspection, test, and tool call in AUTHORITATIVE_WORKDIR_JSON; TASK scope paths describe the source repository and must not replace this workdir.\n"
             "SAFETY_BOUNDARY=Work only inside the supplied task and workdir; do not expand scope, reveal secrets, or perform approval-gated actions.\n"
+        ) + ("READ_ONLY_RULE=Inspect only. Do not create, modify, delete, rename, stage, commit, or run commands that can change repository state.\n" if request.read_only else "") + (
             f"OUTPUT_SCHEMA_ID={request.output_schema}\n"
             "OUTPUT_RULE=Return exactly one JSON object matching OUTPUT_SCHEMA_JSON with no prose or markdown.\n"
             f"OUTPUT_SCHEMA_JSON={schema}\nTASK\n"
-        ).encode("utf-8")
+        )
+        header=header.encode("utf-8")
         payload=header+task_bytes+b"\nHANDOFF\n"+handoff_bytes
         return payload.decode("utf-8"), None
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
         return None, AgentResult(status=AgentStatus.FAILED, summary="Unable to read task file")
+
+
+def canonical_output_schema(role: AgentRole) -> dict[str, object]:
+    properties={
+            "status":{"type":"string","enum":["passed","failed"]},
+            "evidence":{"type":"array","items":{"type":"string"},"maxItems":50},
+            "artifacts":{"type":"array","items":{"type":"string"},"maxItems":50},
+        }
+    required=["status","evidence","artifacts"]
+    if role is AgentRole.IMPLEMENTER:
+            properties["changed_paths"]={"type":"array","maxItems":10000,"items":{"type":"string","minLength":1,"maxLength":1024}}
+            required.append("changed_paths")
+    if role is AgentRole.REVIEWER:
+            properties["findings"]={"type":"array","maxItems":50,"items":{"type":"object","additionalProperties":False,"required":["severity","code","message"],"properties":{"severity":{"type":"string","enum":["BLOCKER","MAJOR","MINOR","NOTE"]},"code":{"type":"string","minLength":1,"maxLength":100},"message":{"type":"string","minLength":1,"maxLength":500}}}}
+            required.append("findings")
+    return {"type":"object","additionalProperties":False,"required":required,"properties":properties}
 
 class FindingPayload(BaseModel):
     model_config=ConfigDict(extra="forbid",strict=True)

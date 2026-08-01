@@ -20,6 +20,7 @@ from triagent.adapters.fake import FakeAgent
 from triagent.domain import Budget, RiskLevel, TaskSpec, TaskState
 from triagent.git_workspace import GitWorkspace
 from triagent.orchestrator import Orchestrator
+from triagent.read_only import ReadOnlyOrchestrator, load_source_snapshot, save_source_snapshot, source_snapshot
 from triagent.report import render_persisted_report
 from triagent.router import ImplementationRouter
 from triagent.runtime import DataRootError, resolve_v2_data_root
@@ -304,6 +305,45 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
     typer.echo(f"Task: {task.id}\nState: {state.value}\nReport: {store.runs_root / task.id / 'final-report.md'}")
 
 
+@app.command("inspect")
+def inspect_read_only(
+    repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
+    forbidden: ForbiddenOptions = None, visual_check: VisualCheckOption = "none",
+    profile: Annotated[str, typer.Option()] = "fake", data_root: DataRoot = None,
+    live_confirmed: Annotated[bool, typer.Option("--live-confirmed")] = False,
+    billing_confirmed: Annotated[bool, typer.Option("--billing-confirmed")] = False,
+) -> None:
+    if profile == "fake" or not (live_confirmed and billing_confirmed):
+        raise typer.BadParameter("read-only inspection requires a real profile and both confirmations")
+    try:
+        config = tomllib.loads(Path(profile).read_text(encoding="utf-8"))
+        stream_v2 = _profile_stream_v2_options(config)
+        for agent in ("codex", "antigravity"):
+            _profile_command(config, agent)
+        GitWorkspace.validate(repo)
+        before = source_snapshot(repo)
+        values = config.get("budget", {})
+        budget = Budget(max_agent_calls=int(values.get("max_agent_calls", 20)), max_minutes=int(values.get("max_minutes", 60)), max_usd=float(values.get("max_usd", 0)))
+        store = TaskStore(_root(data_root, allow_initialize=True))
+        task = store.create_task(_spec(repo, goal, risk, acceptance, forbidden, visual_check, budget).model_copy(update={"read_only": True}))
+        save_source_snapshot(store.runs_root / task.id, before)
+        store.record_attestation(task.id, "live-confirmed", True)
+        store.record_attestation(task.id, "billing-confirmed", True)
+        orchestrator = ReadOnlyOrchestrator(
+            store, CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config, "codex"), stream_v2=stream_v2["codex"]),
+            CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config, "codex"), stream_v2=stream_v2["codex"]),
+            AntigravityAdapter(command=_profile_command(config, "antigravity"), estimated_usd=_priced(config, "antigravity"), stream_v2=stream_v2["antigravity"]),
+            profile_digest=_profile_digest(config), source=repo, source_before=before,
+        )
+        state = orchestrator.run_until_blocked(task.id)
+        orchestrator._assert_unchanged()
+    except (OSError, tomllib.TOMLDecodeError, ValueError, RuntimeError, TypeError):
+        raise typer.BadParameter("read-only inspection failed; inspect persisted task status") from None
+    report_path = store.runs_root / task.id / "final-report.md"
+    report_path.write_text(render_persisted_report(store, task.id), encoding="utf-8")
+    typer.echo(f"Task: {task.id}\nState: {state.value}\nReport: {report_path}")
+
+
 @app.command()
 def resume(
     task_id: str,
@@ -339,8 +379,38 @@ def resume(
             stream_v2 = _profile_stream_v2_options(config)
             digest = _profile_digest(config)
             persisted = store.execution_provenance(task_id)
-            if persisted is None or persisted.get("mode") != "live":
+            if persisted is None or persisted.get("mode") not in {"live", "read-only"}:
                 raise ValueError("live execution provenance unavailable")
+            if persisted.get("mode") == "read-only":
+                expected = {
+                    "mode": "read-only", "implementer": "none", "verifier": "codex",
+                    "reviewer": "antigravity", "profile_digest": digest,
+                }
+                _require_provenance(store, task_id, expected)
+                task = store.load(task_id)
+                if not task.spec.read_only:
+                    raise ValueError("read-only task specification unavailable")
+                before = load_source_snapshot(store.runs_root / task_id)
+                source = Path(task.spec.scope[0]).resolve()
+                if source_snapshot(source) != before:
+                    raise ValueError("read-only source changed")
+                for agent in ("codex", "antigravity"):
+                    _profile_command(config, agent)
+                orchestrator = ReadOnlyOrchestrator(
+                    store,
+                    CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config, "codex"), stream_v2=stream_v2["codex"]),
+                    CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config, "codex"), stream_v2=stream_v2["codex"]),
+                    AntigravityAdapter(command=_profile_command(config, "antigravity"), estimated_usd=_priced(config, "antigravity"), stream_v2=stream_v2["antigravity"]),
+                    profile_digest=digest, source=source, source_before=before,
+                    expected_recovery_checkpoint=recovery_checkpoint,
+                )
+                store.record_attestation(task_id, "live-confirmed", True)
+                store.record_attestation(task_id, "billing-confirmed", True)
+                state = orchestrator.resume_until_blocked(task_id)
+                report_path = store.runs_root / task_id / "final-report.md"
+                report_path.write_text(render_persisted_report(store, task_id), encoding="utf-8")
+                typer.echo(f"Task: {task_id}\nState: {state.value}\nReport: {report_path}")
+                return
             expected = {
                 "mode": "live", "implementer": persisted["implementer"],
                 "verifier": "codex", "reviewer": "antigravity",

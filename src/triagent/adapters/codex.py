@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from triagent.adapters._cli import invoke_codex_jsonl, invoke_codex_jsonl_stream, probe, read_prompt, runtime
+import json
+
+from triagent.adapters._cli import canonical_output_schema, invoke_codex_jsonl, invoke_codex_jsonl_stream, probe, read_prompt, runtime
 from triagent.adapters.base import AgentAdapter, AgentCapabilities, AgentRequest, AgentResult, AgentRole, CostEstimate
 from triagent.adapters.process import ProcessRunner, StreamPolicy, StreamingProcessRunner
 
@@ -51,7 +53,13 @@ class CodexAdapter(AgentAdapter):
     def run(self, request: AgentRequest) -> AgentResult:
         payload,error=read_prompt(request)
         if error:return error
-        argv = [*self._command,"exec","--sandbox","workspace-write","-C",str(request.workdir),"--json","-"]
+        sandbox = "read-only" if request.read_only else "workspace-write"
+        argv = [*self._command,"exec","--sandbox",sandbox,"-C",str(request.workdir)]
+        if request.read_only:
+            schema_path=request.task_file.with_name("codex-output-schema.json")
+            schema_path.write_text(json.dumps(canonical_output_schema(request.role),sort_keys=True,separators=(",",":")),encoding="utf-8")
+            argv.extend(("--output-schema",str(schema_path)))
+        argv.extend(("--json","-"))
         if not self._stream_v2:
             return invoke_codex_jsonl(self._runner,argv,request.workdir,request.timeout_seconds,self._env,self._secrets,request.role,stdin=payload)
         return invoke_codex_jsonl_stream(

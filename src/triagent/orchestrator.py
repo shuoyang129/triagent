@@ -192,6 +192,7 @@ class Orchestrator:
         request: AgentRequest,
         *,
         allow_review_unavailable_retry: bool = True,
+        accept_completed_failure: bool = False,
     ):
         task = self.store.load(task_id)
         identity,roles=_contract(adapter)
@@ -247,7 +248,7 @@ class Orchestrator:
                 task_id, state, self._failed_stage(request.role), diagnostic
             )
             return None
-        if result.data.get("status") == "failed":
+        if result.data.get("status") == "failed" and not accept_completed_failure:
             stage=self._failed_stage(request.role)
             self.store.record_outcome(task_id,self._outcome(stage,result,status="failed"))
             self.store.transition_recoverable(
@@ -473,7 +474,7 @@ class Orchestrator:
             self.store.assert_agent_call_available(
                 task_id, estimate.estimated_usd, lease_owner=owner
             )
-            if stage in {"verify", "review"}:
+            if stage in {"verify", "review"} and self.store.workspace(task_id) is not None:
                 self.store.restore_candidate_worktree(task_id)
             if stage == "implement" and type(self.implementer) is DeepSeekAdapter:
                 self.store.assert_paid_operations_available(
