@@ -145,14 +145,15 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
    && "${contract}" == *"scripts/m39_restore_mode_recovery.py"* \
    && "${contract}" == *"tests/test_m39_minimal_motion_adapter.py"* ) \
    || "${contract}" == *"Repair M39 after physical expiry run v23 failed safely before active motion"* \
+   || "${contract}" == *"Repair M39 after physical expiry run v24 exposed publisher initialization latency"* \
    || "${contract}" == *"M39 physical restore repair final pre-active review"* ]]; then
-  test_scope="m39-exact-134-328-15"
+  test_scope="m39-exact-135-329-15"
   test_status=0
   "${python_bin}" -m pytest -q \
     tests/test_g1_sonic_minimal_motion.py \
     tests/test_m39_minimal_motion_adapter.py > "${test_log}" 2>&1
   [[ $? -eq 0 ]] || test_status=1
-  if ! grep -Fq "134 passed" "${test_log}"; then
+  if ! grep -Fq "135 passed" "${test_log}"; then
     test_status=1
   fi
   "${python_bin}" -m pytest -q \
@@ -162,7 +163,7 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
     tests/test_g1_sonic_minimal_motion.py \
     tests/test_m39_minimal_motion_adapter.py >> "${test_log}" 2>&1
   [[ $? -eq 0 ]] || test_status=1
-  if ! grep -Fq "328 passed, 18 subtests passed" "${test_log}"; then
+  if ! grep -Fq "329 passed, 18 subtests passed" "${test_log}"; then
     test_status=1
   fi
   "${python_bin}" -m pytest -q \
@@ -215,8 +216,8 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
     print -r -- "M39_PNG_EXPECTED_SHA256=${m39_png_expected_sha}"
     print -r -- "M39_PNG_ACTUAL_SHA256=${m39_png_actual_sha}"
     print -r -- "M39_PNG_FILE=${m39_png_description}"
-    print -r -- "M39_EXACT_FOCUSED_EXPECTED=134 passed"
-    print -r -- "M39_EXACT_PROTECTION_EXPECTED=328 passed, 18 subtests passed"
+    print -r -- "M39_EXACT_FOCUSED_EXPECTED=135 passed"
+    print -r -- "M39_EXACT_PROTECTION_EXPECTED=329 passed, 18 subtests passed"
     print -r -- "M39_EXACT_POLICY_EXPECTED=15 passed"
   } >> "${artifact_log}"
 
