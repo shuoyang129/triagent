@@ -319,6 +319,7 @@ def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
         "Repair M39 after physical expiry run v24 exposed publisher initialization latency"
         in route_condition
     )
+    assert "Harden the M39 v25 damping-stop CRC cache contract" in route_condition
     for required in (
         "tests/test_m39_minimal_motion_adapter.py",
         "services/g1_telemetry/sonic_minimal_motion.py",
