@@ -2,19 +2,42 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from triagent.adapters._cli import invoke_codex_jsonl, probe, read_prompt, runtime
+from triagent.adapters._cli import invoke_codex_jsonl, invoke_codex_jsonl_stream, probe, read_prompt, runtime
 from triagent.adapters.base import AgentAdapter, AgentCapabilities, AgentRequest, AgentResult, AgentRole, CostEstimate
-from triagent.adapters.process import ProcessRunner
+from triagent.adapters.process import ProcessRunner, StreamPolicy, StreamingProcessRunner
 
 
 class CodexAdapter(AgentAdapter):
     identity = "codex"
     allowed_roles = frozenset({AgentRole.VERIFIER})
-    def __init__(self, runner: ProcessRunner | None = None, secret_values: Sequence[str] = (), command: Sequence[str] = ("codex.exe",), estimated_usd: float | None = None) -> None:
+    def __init__(
+        self,
+        runner: ProcessRunner | None = None,
+        secret_values: Sequence[str] = (),
+        command: Sequence[str] = ("codex.exe",),
+        estimated_usd: float | None = None,
+        *,
+        stream_v2: bool = False,
+        stream_runner: StreamingProcessRunner | None = None,
+        stream_policy: StreamPolicy | None = None,
+    ) -> None:
+        """Create a verifier adapter.
+
+        ``stream_v2`` is deliberately opt-in.  Its default preserves the
+        frozen controller's single blocking ``ProcessRunner`` invocation,
+        including the exact argv, timeout, and JSONL parsing behavior.  The
+        v2 runner is injected for tests and later approval-gated migration;
+        it is never selected from ambient environment state.
+        """
+        if not isinstance(stream_v2, bool):
+            raise TypeError("stream_v2 must be a bool")
         default_runner, self._env, self._secrets = runtime(("OPENAI_API_KEY", "CODEX_HOME"), secret_values)
         self._runner = runner or default_runner
         self._command = list(command)
         self._estimated_usd=estimated_usd
+        self._stream_v2 = stream_v2
+        self._stream_runner = stream_runner or StreamingProcessRunner(redactions=self._secrets)
+        self._stream_policy = stream_policy
     def estimate_cost(self, request): return CostEstimate(self._estimated_usd)
 
     def capabilities(self) -> AgentCapabilities:
@@ -28,4 +51,35 @@ class CodexAdapter(AgentAdapter):
     def run(self, request: AgentRequest) -> AgentResult:
         payload,error=read_prompt(request)
         if error:return error
-        return invoke_codex_jsonl(self._runner,[*self._command,"exec","--sandbox","workspace-write","-C",str(request.workdir),"--json","-"],request.workdir,request.timeout_seconds,self._env,self._secrets,request.role,stdin=payload)
+        argv = [*self._command,"exec","--sandbox","workspace-write","-C",str(request.workdir),"--json","-"]
+        if not self._stream_v2:
+            return invoke_codex_jsonl(self._runner,argv,request.workdir,request.timeout_seconds,self._env,self._secrets,request.role,stdin=payload)
+        return invoke_codex_jsonl_stream(
+            self._stream_runner,
+            argv,
+            request.workdir,
+            self._stream_policy or _compat_stream_policy(request.timeout_seconds),
+            self._env,
+            self._secrets,
+            request.role,
+            stdin=payload,
+        )
+
+
+def _compat_stream_policy(timeout_seconds: float) -> StreamPolicy:
+    """Bound an opt-in stream run by the legacy request timeout.
+
+    This is a compatibility bridge only.  A later persisted timeout-selection
+    integration may supply an explicit ``stream_policy``; no implicit matrix
+    lookup or provider probe is performed here.
+    """
+    hard = float(timeout_seconds)
+    startup = min(30.0, hard)
+    finalize = min(60.0, hard)
+    return StreamPolicy(
+        startup_timeout=startup,
+        idle_timeout=hard,
+        hard_timeout=hard,
+        finalize_grace=finalize,
+        terminate_grace=min(2.0, finalize),
+    )

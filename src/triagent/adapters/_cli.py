@@ -12,7 +12,7 @@ from typing import Callable, Mapping, Sequence
 from triagent.adapters.base import AgentResult, AgentStatus, AgentRole
 from pydantic import BaseModel,ConfigDict,Field,StrictStr,ValidationError
 from typing import Literal
-from triagent.adapters.process import ProcessResult, ProcessRunner
+from triagent.adapters.process import ProcessResult, ProcessRunner, StreamPolicy, StreamingProcessResult, StreamingProcessRunner
 
 REDACTED = "[REDACTED]"
 _SECRET_KEY = re.compile(r"(?:api[_-]?key|token|secret|password|authorization|credential)", re.IGNORECASE)
@@ -282,6 +282,129 @@ def invoke_codex_jsonl(
     except ValueError: return AgentResult(status=AgentStatus.INVALID_OUTPUT,summary="CLI returned invalid canonical output")
     actual=payload.get("actual_usd") if isinstance(payload.get("actual_usd"),(int,float)) else None
     return AgentResult(status=AgentStatus.SUCCEEDED, data=data,actual_usd=actual)
+
+
+def _parse_codex_jsonl(process: ProcessResult | StreamingProcessResult, secret_values: Sequence[str], role: AgentRole) -> AgentResult:
+    """Parse the shared Codex JSONL wire format after transport completion."""
+    messages: list[str] = []
+    try:
+        for line in process.stdout.splitlines():
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            if not isinstance(event, dict):
+                raise ValueError
+            item = event.get("item")
+            if event.get("type") == "item.completed" and isinstance(item, dict) and item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+                messages.append(item["text"])
+                continue
+            if event.get("type") == "agent_message" and isinstance(event.get("message"), str):
+                messages.append(event["message"])
+                continue
+            if event.get("type") == "message" and event.get("role") == "assistant" and isinstance(event.get("content"), list):
+                text = "".join(part.get("text", "") for part in event["content"] if isinstance(part, dict) and part.get("type") in {"output_text", "text"})
+                if text:
+                    messages.append(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="CLI returned malformed structured output")
+    if not messages:
+        return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="CLI returned no final agent message")
+    message = sanitize(messages[-1], secret_values)
+    assert isinstance(message, str)
+    try:
+        payload = json.loads(message)
+    except json.JSONDecodeError:
+        return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="CLI returned non-JSON canonical output")
+    try:
+        data = _canonical(role, payload)
+    except ValueError:
+        return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="CLI returned invalid canonical output")
+    actual = payload.get("actual_usd") if isinstance(payload.get("actual_usd"), (int, float)) else None
+    return AgentResult(status=AgentStatus.SUCCEEDED, data=data, actual_usd=actual)
+
+
+class _CodexJsonlStreamClassifier:
+    """Trusted, incremental JSONL classifier used only for stream liveness.
+
+    It never exposes provider output and only counts complete, valid structured
+    records as progress.  The final canonical response is still parsed from
+    the bounded runner evidence after process exit.
+    """
+
+    _PROGRESS_TYPES = frozenset({"thread.started", "turn.started", "item.completed", "agent_message", "message", "turn.completed"})
+
+    def __init__(self) -> None:
+        self._pending = ""
+        self.terminal_seen = False
+
+    def progress(self, stream: str, text: str) -> bool:
+        if stream != "stdout":
+            return False
+        self._pending += text
+        progress = False
+        while "\n" in self._pending:
+            raw, self._pending = self._pending.split("\n", 1)
+            if not raw.strip():
+                continue
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+                continue
+            if event["type"] in self._PROGRESS_TYPES:
+                progress = True
+            item = event.get("item")
+            if event["type"] == "item.completed" and isinstance(item, dict) and item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+                self.terminal_seen = True
+            elif event["type"] == "agent_message" and isinstance(event.get("message"), str):
+                self.terminal_seen = True
+            elif event["type"] == "message" and event.get("role") == "assistant" and isinstance(event.get("content"), list):
+                self.terminal_seen = True
+        return progress
+
+    def terminal(self, _stream: str, _text: str) -> bool:
+        return self.terminal_seen
+
+
+def invoke_codex_jsonl_stream(
+    runner: StreamingProcessRunner,
+    argv: Sequence[str],
+    cwd: Path,
+    policy: StreamPolicy,
+    env: Mapping[str, str] | None = None,
+    secret_values: Sequence[str] = (),
+    role: AgentRole = AgentRole.VERIFIER,
+    stdin: str | None = None,
+) -> AgentResult:
+    """Run Codex through the opt-in v2 stream transport.
+
+    The wire contract remains the same ``codex exec --json -`` JSONL format.
+    This function exists alongside rather than replacing the legacy transport
+    until an explicitly approved migration enables the feature flag.
+    """
+    classifier = _CodexJsonlStreamClassifier()
+    try:
+        process = runner.run(
+            argv,
+            cwd,
+            policy,
+            env or {},
+            stdin=stdin,
+            is_progress=classifier.progress,
+            is_terminal_result=classifier.terminal,
+        )
+    except (FileNotFoundError, OSError):
+        return AgentResult(status=AgentStatus.UNAVAILABLE, summary="CLI executable is unavailable")
+    if process.timed_out:
+        return AgentResult(status=AgentStatus.TIMED_OUT, summary="CLI execution timed out")
+    if process.returncode != 0:
+        diagnostic = f"{process.stdout}\n{process.stderr}".lower()
+        auth_code = re.search(r"(?<!\d)(?:401|403)(?!\d)", diagnostic) is not None
+        if auth_code or any(marker in diagnostic for marker in _AUTH_FAILURES):
+            return AgentResult(status=AgentStatus.UNAVAILABLE, summary="CLI authentication or configuration is unavailable")
+        return AgentResult(status=AgentStatus.FAILED, summary="CLI execution failed")
+    return _parse_codex_jsonl(process, secret_values, role)
 
 
 def invoke_opencode_jsonl(
