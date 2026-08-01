@@ -342,3 +342,49 @@ class CompletionControl:
         try: os.fsync(directory)
         finally: os.close(directory)
         return result
+
+
+def find_recoverable_result(
+    runs_root: Path,
+    *,
+    task_id: str,
+    provider: str,
+    role: str,
+    profile_digest: str,
+    runtime_manifest_digest: str,
+    candidate_commit: str,
+    provider_worktree: Path,
+) -> tuple[CompletionControl, DurableResult] | None:
+    """Locate one valid durable result for an exact controller binding."""
+    task_root = Path(runs_root).resolve(strict=True) / task_id
+    control_parent = task_root / "control"
+    if not control_parent.exists():
+        return None
+    _assert_existing_chain_not_links(control_parent)
+    for child in sorted(control_parent.iterdir()):
+        _assert_not_link(child)
+        if not child.is_dir() or child.name.startswith("."):
+            raise CompletionError("invalid completion control directory")
+        result_path = child / "result.json"
+        if not result_path.exists():
+            continue
+        payload = _read_json(result_path)
+        try:
+            binding = CompletionBinding(
+                **{key: payload.get(key) for key in CompletionBinding.__dataclass_fields__}
+            )
+        except CompletionError:
+            raise CompletionError("invalid completion result binding") from None
+        if (
+            binding.task_id != task_id
+            or binding.call_id != child.name
+            or binding.provider != provider
+            or binding.role != role
+            or binding.profile_digest != profile_digest
+            or binding.runtime_manifest_digest != runtime_manifest_digest
+        ):
+            continue
+        control = CompletionControl(Path(runs_root), binding, provider_worktree)
+        record = control.read_result(expected_candidate_commit=candidate_commit)
+        return control, record
+    return None

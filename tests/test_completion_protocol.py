@@ -14,6 +14,7 @@ from triagent.completion import (
     CompletionControl,
     CompletionError,
     _digest,
+    find_recoverable_result,
 )
 
 
@@ -107,3 +108,34 @@ def test_input_manifest_and_result_are_immutable_for_a_binding(tmp_path: Path) -
     control.write_result(candidate_commit=COMMIT, outcome={"status": "ok"}, written_at="2026-08-01T00:00:00+00:00")
     with pytest.raises(CompletionError, match="different content"):
         control.write_result(candidate_commit=COMMIT, outcome={"status": "changed"}, written_at="2026-08-01T00:00:00+00:00")
+
+
+def test_recovery_discovers_only_an_exact_bound_durable_result(tmp_path: Path) -> None:
+    control, manifest = _control(tmp_path)
+    control.write_input_manifest(manifest)
+    control.write_result(candidate_commit=COMMIT, outcome={"status": "ok"})
+
+    found = find_recoverable_result(
+        control.runs_root,
+        task_id=control.binding.task_id,
+        provider="fake",
+        role="implementer",
+        profile_digest="c" * 64,
+        runtime_manifest_digest="d" * 64,
+        candidate_commit=COMMIT,
+        provider_worktree=control.provider_worktree,
+    )
+
+    assert found is not None
+    assert found[0].binding == control.binding
+    assert found[1].result_digest == control.read_result().result_digest
+    assert find_recoverable_result(
+        control.runs_root,
+        task_id=control.binding.task_id,
+        provider="fake",
+        role="implementer",
+        profile_digest="f" * 64,
+        runtime_manifest_digest="d" * 64,
+        candidate_commit=COMMIT,
+        provider_worktree=control.provider_worktree,
+    ) is None
