@@ -316,7 +316,7 @@ def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
     ):
         assert required in route_condition
 
-    m39_body = text.split('test_scope="m39-exact-89-283-15"', 1)[1].split(
+    m39_body = text.split('test_scope="m39-exact-93-287-15"', 1)[1].split(
         'elif [[ "${contract}" == *"tests/test_g1_sonic_zero_command_takeover.py"*',
         1,
     )[0]
@@ -333,8 +333,8 @@ def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
         "scripts/m39_minimal_motion_adapter.py",
         "scripts/collect_g1_sonic_minimal_motion.py",
         "configs/g1_sonic_minimal_motion_policy.json",
-        "89 passed",
-        "283 passed, 18 subtests passed",
+        "93 passed",
+        "287 passed, 18 subtests passed",
         "15 passed",
         "dd888cfb4216067a7b24bff1f9ba01909b7335c821b94112d384fb77ba897d69",
         "4083b391964332e77b63306d4f2672bbba23436f3defb681cb22e75246564213",
