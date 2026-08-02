@@ -148,14 +148,21 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
    || "${contract}" == *"Repair M39 after physical expiry run v24 exposed publisher initialization latency"* \
    || "${contract}" == *"Harden the M39 v25 damping-stop CRC cache contract"* \
    || "${contract}" == *"M39 physical G1 repair review v27d"* \
+   || "${contract}" == *"M39 physical G1 writer-close half-open review"* \
    || "${contract}" == *"M39 physical restore repair final pre-active review"* ]]; then
-  test_scope="m39-exact-135-329-15"
+  m39_focused_expected="135 passed"
+  m39_protection_expected="329 passed, 18 subtests passed"
+  if [[ "${contract}" == *"M39 physical G1 writer-close half-open review"* ]]; then
+    m39_focused_expected="136 passed"
+    m39_protection_expected="330 passed, 18 subtests passed"
+  fi
+  test_scope="m39-exact-${m39_focused_expected%% *}-${m39_protection_expected%% *}-15"
   test_status=0
   "${python_bin}" -m pytest -q \
     tests/test_g1_sonic_minimal_motion.py \
     tests/test_m39_minimal_motion_adapter.py > "${test_log}" 2>&1
   [[ $? -eq 0 ]] || test_status=1
-  if ! grep -Fq "135 passed" "${test_log}"; then
+  if ! grep -Fq "${m39_focused_expected}" "${test_log}"; then
     test_status=1
   fi
   "${python_bin}" -m pytest -q \
@@ -165,7 +172,7 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
     tests/test_g1_sonic_minimal_motion.py \
     tests/test_m39_minimal_motion_adapter.py >> "${test_log}" 2>&1
   [[ $? -eq 0 ]] || test_status=1
-  if ! grep -Fq "329 passed, 18 subtests passed" "${test_log}"; then
+  if ! grep -Fq "${m39_protection_expected}" "${test_log}"; then
     test_status=1
   fi
   "${python_bin}" -m pytest -q \
@@ -218,8 +225,8 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
     print -r -- "M39_PNG_EXPECTED_SHA256=${m39_png_expected_sha}"
     print -r -- "M39_PNG_ACTUAL_SHA256=${m39_png_actual_sha}"
     print -r -- "M39_PNG_FILE=${m39_png_description}"
-    print -r -- "M39_EXACT_FOCUSED_EXPECTED=135 passed"
-    print -r -- "M39_EXACT_PROTECTION_EXPECTED=329 passed, 18 subtests passed"
+    print -r -- "M39_EXACT_FOCUSED_EXPECTED=${m39_focused_expected}"
+    print -r -- "M39_EXACT_PROTECTION_EXPECTED=${m39_protection_expected}"
     print -r -- "M39_EXACT_POLICY_EXPECTED=15 passed"
   } >> "${artifact_log}"
 
