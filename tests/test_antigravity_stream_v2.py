@@ -43,7 +43,7 @@ class _OfflineStream:
         self.progress: list[bool] = []
         self.terminal: list[bool] = []
 
-    def run(self, argv, cwd, policy, env, stdin=None, *, is_progress=None, is_terminal_result=None):
+    def run(self, argv, cwd, policy, env, stdin=None, *, is_progress=None, is_terminal_result=None, on_event=None):
         self.calls.append((list(argv), Path(cwd), policy, dict(env), stdin))
         # Fragmentation demonstrates terminal recognition before a deliberately
         # delayed fake process exit; arbitrary chunks are not progress.

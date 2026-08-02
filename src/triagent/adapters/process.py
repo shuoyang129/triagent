@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import queue
 import selectors
@@ -12,6 +13,20 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
+
+
+def safe_progress_event_sink(events_file: Path) -> Callable[[StreamEvent], None]:
+    """Persist content-free semantic stream events; liveness is never recorded."""
+    safe_kinds = frozenset({StreamEventKind.PROGRESS, StreamEventKind.TERMINAL_RESULT_SEEN, StreamEventKind.COMPLETED})
+
+    def record(event: StreamEvent) -> None:
+        if event.kind not in safe_kinds:
+            return
+        payload = {"event": f"stream-{event.kind.value}", "source": event.stream or "controller"}
+        with events_file.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+    return record
 
 
 @dataclass(frozen=True)
@@ -144,6 +159,7 @@ class StreamingProcessRunner:
         is_progress: Callable[[str, str], bool] | None = None,
         is_terminal_result: Callable[[str, str], bool] | None = None,
         progress_probe: Callable[[], bool] | None = None,
+        on_event: Callable[[StreamEvent], None] | None = None,
     ) -> StreamingProcessResult:
         if not argv or any(not isinstance(item, str) or not item for item in argv):
             raise ValueError("argv must contain non-empty strings")
@@ -181,7 +197,14 @@ class StreamingProcessRunner:
         probe_interval = min(1.0, policy.idle_timeout / 4)
 
         def emit(kind: StreamEventKind, stream: str | None = None, text: str = "") -> None:
-            events.append(StreamEvent(kind, now(), stream, text))
+            event = StreamEvent(kind, now(), stream, text)
+            events.append(event)
+            if on_event is not None:
+                try:
+                    on_event(event)
+                except Exception:
+                    # Progress reporting must not extend, block, or fail a provider call.
+                    pass
 
         def consume(stream: str, raw: bytes) -> None:
             nonlocal first_output, meaningful_at, terminal_at, truncated

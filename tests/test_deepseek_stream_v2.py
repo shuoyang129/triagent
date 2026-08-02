@@ -52,7 +52,7 @@ class _StreamRunner:
         self.progress: list[bool] = []
         self.terminal: list[bool] = []
 
-    def run(self, argv, cwd, policy, env, stdin=None, *, is_progress=None, is_terminal_result=None, progress_probe=None):
+    def run(self, argv, cwd, policy, env, stdin=None, *, is_progress=None, is_terminal_result=None, progress_probe=None, on_event=None):
         self.calls.append((list(argv), Path(cwd), policy, dict(env), stdin))
         if self.edit:
             (Path(cwd) / "base.txt").write_text("edited\n", encoding="utf-8")

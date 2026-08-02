@@ -6,7 +6,7 @@ import json
 
 from triagent.adapters._cli import canonical_output_schema, invoke_codex_jsonl, invoke_codex_jsonl_stream, parse_codex_final_message, probe, read_prompt, runtime
 from triagent.adapters.base import AgentAdapter, AgentCapabilities, AgentRequest, AgentResult, AgentRole, AgentStatus, CostEstimate
-from triagent.adapters.process import ProcessRunner, StreamPolicy, StreamingProcessRunner
+from triagent.adapters.process import ProcessRunner, StreamPolicy, StreamingProcessRunner, safe_progress_event_sink
 
 
 class CodexAdapter(AgentAdapter):
@@ -72,6 +72,7 @@ class CodexAdapter(AgentAdapter):
                     self._stream_runner, argv, request.workdir,
                     self._stream_policy or _compat_stream_policy(request.timeout_seconds),
                     self._env, self._secrets, request.role, stdin=payload,
+                    on_event=safe_progress_event_sink(request.task_file.parent / "events.jsonl"),
                 )
             if output_path is not None and result.status is AgentStatus.INVALID_OUTPUT:
                 return parse_codex_final_message(output_path, self._secrets, request.role) or result

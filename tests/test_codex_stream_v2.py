@@ -50,7 +50,7 @@ class _FakeStreamingRunner:
         self.progress: list[bool] = []
         self.terminal: list[bool] = []
 
-    def run(self, argv, cwd, policy, env, stdin=None, *, is_progress=None, is_terminal_result=None):
+    def run(self, argv, cwd, policy, env, stdin=None, *, is_progress=None, is_terminal_result=None, on_event=None):
         self.calls.append((list(argv), Path(cwd), policy, dict(env), stdin))
         # Deliberately split JSON records, proving the stream classifier never
         # accepts arbitrary bytes as progress and recognizes a final message.

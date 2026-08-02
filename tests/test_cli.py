@@ -659,6 +659,12 @@ def test_create_status_approve_report_and_doctor_are_operator_readable(tmp_path:
     task_id = created.output.split("Task: ", 1)[1].splitlines()[0]
     status = runner.invoke(app, ["status", "--data-root", str(data), task_id])
     assert status.exit_code == 0 and "State: SPEC" in status.output
+    events = data / "runs" / task_id / "events.jsonl"
+    with events.open("a", encoding="utf-8") as handle:
+        handle.write("{\"event\":\"stream-progress\",\"source\":\"stdout\"}\n")
+        handle.write("{\"event\":\"stream-liveness\",\"source\":\"stdout\"}\n")
+    progressed = runner.invoke(app, ["status", "--data-root", str(data), task_id])
+    assert "Progress: stream-progress source=stdout" in progressed.output
     denied = runner.invoke(app, ["approve", "--data-root", str(data), task_id, "visual"])
     assert denied.exit_code != 0
     report = runner.invoke(app, ["report", "--data-root", str(data), task_id])

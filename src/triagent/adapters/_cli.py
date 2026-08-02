@@ -12,7 +12,7 @@ from typing import Callable, Mapping, Sequence
 from triagent.adapters.base import AgentResult, AgentStatus, AgentRole
 from pydantic import BaseModel,ConfigDict,Field,StrictStr,ValidationError
 from typing import Literal
-from triagent.adapters.process import ProcessResult, ProcessRunner, StreamPolicy, StreamingProcessResult, StreamingProcessRunner
+from triagent.adapters.process import ProcessResult, ProcessRunner, StreamPolicy, StreamingProcessResult, StreamingProcessRunner, safe_progress_event_sink
 
 REDACTED = "[REDACTED]"
 _SECRET_KEY = re.compile(r"(?:api[_-]?key|token|secret|password|authorization|credential)", re.IGNORECASE)
@@ -408,6 +408,7 @@ def invoke_codex_jsonl_stream(
     secret_values: Sequence[str] = (),
     role: AgentRole = AgentRole.VERIFIER,
     stdin: str | None = None,
+    on_event=None,
 ) -> AgentResult:
     """Run Codex through the opt-in v2 stream transport.
 
@@ -425,6 +426,7 @@ def invoke_codex_jsonl_stream(
             stdin=stdin,
             is_progress=classifier.progress,
             is_terminal_result=classifier.terminal,
+            on_event=on_event,
         )
     except (FileNotFoundError, OSError):
         return AgentResult(status=AgentStatus.UNAVAILABLE, summary="CLI executable is unavailable")

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from triagent.adapters._cli import invoke_json, probe, read_prompt, runtime
 from triagent.adapters.base import AgentAdapter, AgentCapabilities, AgentRequest, AgentResult, AgentRole, AgentStatus, CostEstimate
-from triagent.adapters.process import ProcessRunner, StreamPolicy, StreamingProcessRunner
+from triagent.adapters.process import ProcessRunner, StreamPolicy, StreamingProcessRunner, safe_progress_event_sink
 
 
 class CursorCapabilities(AgentCapabilities):
@@ -59,6 +59,7 @@ class CursorAdapter(AgentAdapter):
             self._stream_runner, argv, request.workdir,
             self._stream_policy or _compat_stream_policy(request.timeout_seconds),
             self._env, self._secrets, stdin=payload,
+            on_event=safe_progress_event_sink(request.task_file.parent / "events.jsonl"),
         )
 
 
@@ -115,13 +116,15 @@ def _invoke_cursor_envelope_stream(
     runner: StreamingProcessRunner,
     argv: Sequence[str], cwd: Path, policy: StreamPolicy,
     env: dict[str, str], secret_values: Sequence[str], *, stdin: str | None,
+    on_event=None,
 ) -> AgentResult:
     """Independent Cursor stream-v2 transport; no capability probe or fallback."""
     classifier = _FinalEnvelopeClassifier()
     try:
         process = runner.run(argv, cwd, policy, env, stdin=stdin,
                              is_progress=classifier.progress,
-                             is_terminal_result=classifier.terminal)
+                             is_terminal_result=classifier.terminal,
+                             on_event=on_event)
     except (FileNotFoundError, OSError):
         return AgentResult(status=AgentStatus.UNAVAILABLE, summary="CLI executable is unavailable")
     if process.timed_out:

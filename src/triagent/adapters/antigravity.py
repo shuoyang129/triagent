@@ -4,7 +4,7 @@ from collections.abc import Sequence
 
 from triagent.adapters._cli import TransportSecurityError,external_restricted_input,invoke_json, probe, runtime
 from triagent.adapters.base import AgentAdapter, AgentCapabilities, AgentRequest, AgentResult, AgentRole, AgentStatus, CostEstimate
-from triagent.adapters.process import ProcessResult, ProcessRunner, StreamPolicy, StreamingProcessResult, StreamingProcessRunner
+from triagent.adapters.process import ProcessResult, ProcessRunner, StreamPolicy, StreamingProcessResult, StreamingProcessRunner, safe_progress_event_sink
 
 
 class AntigravityAdapter(AgentAdapter):
@@ -63,6 +63,7 @@ class AntigravityAdapter(AgentAdapter):
                     self._stream_runner, argv, request.workdir,
                     self._stream_policy or _compat_stream_policy(request.timeout_seconds),
                     self._env, self._secrets, request.role,
+                    on_event=safe_progress_event_sink(request.task_file.parent / "events.jsonl"),
                 )
         except TransportSecurityError as error:
             return AgentResult(status=AgentStatus.FAILED,summary=error.code,data={"diagnostic_code":error.code})
@@ -84,6 +85,7 @@ def _invoke_agy_stream(
     env,
     secrets: Sequence[str],
     role: AgentRole,
+    on_event=None,
 ) -> AgentResult:
     """Stream the wrapper while retaining its one-object/fenced JSON contract."""
     chunks: list[str] = []
@@ -134,6 +136,7 @@ def _invoke_agy_stream(
         result: StreamingProcessResult = runner.run(
             argv, cwd, policy, env, is_progress=recognizes,
             is_terminal_result=lambda _stream, _text: terminal,
+            on_event=on_event,
         )
     except (FileNotFoundError, OSError):
         return AgentResult(status=AgentStatus.UNAVAILABLE, summary="CLI executable is unavailable")

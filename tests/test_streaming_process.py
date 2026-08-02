@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-from triagent.adapters.process import StreamEventKind, StreamPolicy, StreamingProcessRunner, _StreamingRedactor
+from triagent.adapters.process import StreamEventKind, StreamPolicy, StreamingProcessRunner, _StreamingRedactor, safe_progress_event_sink
 
 
 def policy(**overrides: object) -> StreamPolicy:
@@ -76,6 +76,20 @@ def test_streaming_runner_controller_probe_refreshes_on_state_change(tmp_path: P
 
     assert result.returncode == 0 and not result.timed_out
     assert StreamEventKind.PROGRESS in kinds(result)
+
+
+def test_semantic_event_sink_persists_no_liveness_content(tmp_path: Path) -> None:
+    events_file = tmp_path / "events.jsonl"
+    result = invoke(
+        tmp_path, "import time; print('progress', flush=True); time.sleep(.03)",
+        is_progress=lambda _stream, text: "progress" in text,
+        on_event=safe_progress_event_sink(events_file),
+    )
+
+    assert result.returncode == 0
+    persisted = events_file.read_text(encoding="utf-8")
+    assert "stream-progress" in persisted and "stream-completed" in persisted
+    assert "liveness" not in persisted and "progress\\n" not in persisted
 
 
 def test_streaming_runner_hard_timeout_wins_over_progress(tmp_path: Path) -> None:

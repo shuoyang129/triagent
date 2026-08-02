@@ -594,6 +594,22 @@ def status(task_id: str, data_root: DataRoot = None) -> None:
     store = TaskStore(_root(data_root))
     task = store.load(task_id)
     lines = [f"Task: {task.id}", f"State: {task.state.value}"]
+    events_path = store.runs_root / task_id / "events.jsonl"
+    try:
+        event_lines = events_path.read_text(encoding="utf-8").splitlines()[-128:]
+    except OSError:
+        event_lines = []
+    for raw in reversed(event_lines):
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        name, source = event.get("event"), event.get("source")
+        if name in {"stream-progress", "stream-terminal-result-seen", "stream-completed"} and source in {"stdout", "stderr", "controller"}:
+            lines.append(f"Progress: {name} source={source}")
+            break
     if task.state is TaskState.FAILED_RECOVERABLE:
         checkpoint = store.recovery_checkpoint(task_id)
         if checkpoint is not None:

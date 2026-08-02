@@ -33,7 +33,7 @@ from triagent.adapters.base import (
     AgentStatus,
     CostEstimate,
 )
-from triagent.adapters.process import ProcessResult, ProcessRunner, StreamPolicy, StreamingProcessRunner
+from triagent.adapters.process import ProcessResult, ProcessRunner, StreamPolicy, StreamingProcessRunner, safe_progress_event_sink
 
 
 _ALLOWED_MODELS = frozenset(
@@ -331,6 +331,7 @@ def _invoke_stream(
     secrets: Sequence[str],
     role: AgentRole,
     progress_probe: Callable[[], bool] | None = None,
+    on_event: Callable[[object], None] | None = None,
 ) -> AgentResult:
     classifier = _OpenCodeStreamClassifier(role)
     try:
@@ -339,6 +340,7 @@ def _invoke_stream(
             is_progress=classifier.progress,
             is_terminal_result=classifier.terminal,
             progress_probe=progress_probe,
+            on_event=on_event,
         )
     except (FileNotFoundError, OSError):
         return AgentResult(status=AgentStatus.UNAVAILABLE, summary="OpenCode executable is unavailable")
@@ -698,6 +700,7 @@ class DeepSeekAdapter(AgentAdapter):
                     self._secrets,
                     request.role,
                     _worktree_progress_probe(request.workdir),
+                    safe_progress_event_sink(request.task_file.parent / "events.jsonl"),
                 )
             else:
                 result = invoke_opencode_jsonl(
