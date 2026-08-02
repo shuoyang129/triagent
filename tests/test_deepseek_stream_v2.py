@@ -43,10 +43,11 @@ class _ReadinessRunner:
 class _StreamRunner:
     """Offline streaming double; feeds output in deliberately arbitrary chunks."""
 
-    def __init__(self, output: str, *, code: int = 0, edit: bool = False) -> None:
+    def __init__(self, output: str, *, code: int = 0, edit: bool = False, timeout_reason: str | None = None) -> None:
         self.output = output
         self.code = code
         self.edit = edit
+        self.timeout_reason = timeout_reason
         self.calls: list[tuple] = []
         self.progress: list[bool] = []
         self.terminal: list[bool] = []
@@ -61,7 +62,7 @@ class _StreamRunner:
                 self.progress.append(is_progress("stdout", chunk))
             if is_terminal_result is not None:
                 self.terminal.append(is_terminal_result("stdout", chunk))
-        return StreamingProcessResult(self.code, self.output, "", False, (), None, any(self.terminal), False)
+        return StreamingProcessResult(self.code, self.output, "", self.timeout_reason is not None, (), self.timeout_reason, any(self.terminal), False)
 
 
 def _request(tmp_path: Path) -> AgentRequest:
@@ -156,6 +157,16 @@ def test_stream_v2_cleanup_on_transport_failure_and_readiness_never_uses_stream(
     assert len(legacy.calls) == 3 and len(stream.calls) == 1
     assert not list(tmp_path.glob(".triagent-opencode-input-*.txt"))
     assert not list(tmp_path.glob(".triagent-opencode-output-*.json"))
+
+
+def test_stream_v2_persists_specific_timeout_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stream = _StreamRunner("", timeout_reason="idle-timeout")
+    adapter, _legacy = _ready(tmp_path, monkeypatch, stream, stream_v2=True)
+
+    result = adapter.run(_request(tmp_path))
+
+    assert result.status is AgentStatus.TIMED_OUT
+    assert result.data == {"diagnostic_code": "deepseek-idle-timeout"}
 
 
 def test_stream_v2_flag_rejects_non_boolean() -> None:

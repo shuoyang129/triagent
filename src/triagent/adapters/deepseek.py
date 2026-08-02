@@ -72,6 +72,10 @@ DeepSeekDiagnostic = Literal[
     "deepseek-permission-denied",
     "deepseek-rate-limited",
     "deepseek-timeout",
+    "deepseek-startup-timeout",
+    "deepseek-idle-timeout",
+    "deepseek-hard-timeout",
+    "deepseek-finalize-timeout",
     "deepseek-connection-failed",
     "deepseek-service-unavailable",
     "deepseek-request-invalid",
@@ -149,6 +153,9 @@ def _opencode_config(model: str) -> str:
 
 def _failure_diagnostic(process: ProcessResult) -> DeepSeekDiagnostic:
     if process.timed_out:
+        reason = getattr(process, "timeout_reason", None)
+        if reason in {"startup-timeout", "idle-timeout", "hard-timeout", "finalize-timeout"}:
+            return f"deepseek-{reason}"  # type: ignore[return-value]
         return "deepseek-timeout"
     text = f"{process.stdout}\n{process.stderr}".lower()
     if re.search(r"(?<!\d)401(?!\d)", text) or any(
@@ -232,7 +239,11 @@ def _parse_stream_output(
     role: AgentRole,
 ) -> AgentResult:
     if process.timed_out:
-        return AgentResult(status=AgentStatus.TIMED_OUT, summary="OpenCode execution timed out")
+        return AgentResult(
+            status=AgentStatus.TIMED_OUT,
+            summary="OpenCode execution timed out",
+            data={"diagnostic_code": _failure_diagnostic(process)},
+        )
     if process.returncode != 0:
         diagnostic = f"{process.stdout}\n{process.stderr}".lower()
         if re.search(r"(?<!\d)(?:401|403)(?!\d)", diagnostic) or any(
