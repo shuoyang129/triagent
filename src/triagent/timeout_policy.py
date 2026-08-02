@@ -215,10 +215,10 @@ def default_v2_matrix() -> TimeoutMatrix:
     are conservative and all hard limits remain within the legacy maximum.
     """
     size_bounds = {
-        TaskSize.TINY: (60, 120, 600, 60, 15),
-        TaskSize.SMALL: (60, 180, 900, 60, 15),
-        TaskSize.MEDIUM: (90, 300, 1800, 90, 30),
-        TaskSize.LARGE: (120, 600, 3600, 120, 30),
+        TaskSize.TINY: (60, 45, 600, 60, 15),
+        TaskSize.SMALL: (60, 60, 900, 60, 15),
+        TaskSize.MEDIUM: (90, 90, 1800, 90, 30),
+        TaskSize.LARGE: (120, 120, 3600, 120, 30),
     }
     # Codex may construct its read-only sandbox response before emitting its first JSON event.
     # This preserves the meaningful-progress idle bound and hard ceiling.

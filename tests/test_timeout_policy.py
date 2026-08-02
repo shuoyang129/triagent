@@ -30,8 +30,10 @@ def test_small_codex_verification_allows_bounded_initial_sandbox_response() -> N
     policy = default_v2_matrix().select(Provider.CODEX, Stage.VERIFY, TaskSize.SMALL).policy
 
     assert policy.startup_timeout == 180
-    assert policy.idle_timeout == 180
+    assert policy.idle_timeout == 60
     assert policy.hard_timeout == 675
+
+    assert default_v2_matrix().select(Provider.DEEPSEEK, Stage.IMPLEMENT, TaskSize.LARGE).policy.idle_timeout == 120
 
 
 def test_selection_is_strict_and_persistable_digest_changes_with_selector() -> None:

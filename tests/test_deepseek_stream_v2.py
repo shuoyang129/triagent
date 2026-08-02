@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from triagent.adapters.base import AgentRequest, AgentRole, AgentStatus
-from triagent.adapters.deepseek import DeepSeekAdapter, _OpenCodeStreamClassifier
+from triagent.adapters.deepseek import DeepSeekAdapter, _OpenCodeStreamClassifier, _worktree_progress_probe
 from triagent.adapters.process import ProcessResult, StreamingProcessResult
 
 
@@ -52,7 +52,7 @@ class _StreamRunner:
         self.progress: list[bool] = []
         self.terminal: list[bool] = []
 
-    def run(self, argv, cwd, policy, env, stdin=None, *, is_progress=None, is_terminal_result=None):
+    def run(self, argv, cwd, policy, env, stdin=None, *, is_progress=None, is_terminal_result=None, progress_probe=None):
         self.calls.append((list(argv), Path(cwd), policy, dict(env), stdin))
         if self.edit:
             (Path(cwd) / "base.txt").write_text("edited\n", encoding="utf-8")
@@ -137,6 +137,18 @@ def test_stream_v2_status_records_do_not_refresh_meaningful_progress() -> None:
     assert classifier.progress("stderr", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"provider output\"}}\n") is False
     assert classifier.progress("stdout", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"provider prose\"}}\n") is False
     assert classifier.progress("stdout", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"provider output\"}}\n") is False
+
+def test_worktree_progress_probe_ignores_transport_and_detects_candidate_change(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".triagent-opencode-input-private.txt").write_text("x", encoding="utf-8")
+    probe = _worktree_progress_probe(tmp_path)
+
+    assert probe() is False
+    (tmp_path / ".triagent-opencode-output-private.json").write_text("{}", encoding="utf-8")
+    assert probe() is False
+    (tmp_path / "candidate.py").write_text("pass\n", encoding="utf-8")
+    assert probe() is True
+    assert probe() is False
 
 
 def test_stream_v2_invalid_output_recovers_tracked_edit_and_cleans_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

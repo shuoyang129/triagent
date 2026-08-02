@@ -143,6 +143,7 @@ class StreamingProcessRunner:
         *,
         is_progress: Callable[[str, str], bool] | None = None,
         is_terminal_result: Callable[[str, str], bool] | None = None,
+        progress_probe: Callable[[], bool] | None = None,
     ) -> StreamingProcessResult:
         if not argv or any(not isinstance(item, str) or not item for item in argv):
             raise ValueError("argv must contain non-empty strings")
@@ -176,6 +177,8 @@ class StreamingProcessRunner:
         meaningful_at = started
         terminal_at: float | None = None
         timeout_reason: str | None = None
+        next_probe_at = started
+        probe_interval = min(1.0, policy.idle_timeout / 4)
 
         def emit(kind: StreamEventKind, stream: str | None = None, text: str = "") -> None:
             events.append(StreamEvent(kind, now(), stream, text))
@@ -214,6 +217,16 @@ class StreamingProcessRunner:
                 for stream, raw in reader.read(0.05):
                     consume(stream, raw)
                 current = now()
+                # A trusted controller-side probe can observe a semantic stage
+                # change without treating wrapper/process liveness as progress.
+                # Polling is bounded: it cannot become an implicit heartbeat.
+                if progress_probe is not None and current >= next_probe_at:
+                    next_probe_at = current + probe_interval
+                    if progress_probe():
+                        if first_output is None:
+                            first_output = current
+                        meaningful_at = current
+                        emit(StreamEventKind.PROGRESS, "controller")
                 if process.poll() is not None and reader.done:
                     break
                 if current - started >= policy.hard_timeout:

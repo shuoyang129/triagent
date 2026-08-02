@@ -52,6 +52,31 @@ def test_streaming_runner_idle_timeout_ignores_noisy_liveness(tmp_path: Path) ->
     assert StreamEventKind.LIVENESS in kinds(result)
     assert StreamEventKind.PROGRESS not in kinds(result)
 
+def test_streaming_runner_controller_probe_refreshes_on_state_change(tmp_path: Path) -> None:
+    marker = tmp_path / "candidate-state"
+    previous: str | None = None
+
+    def changed() -> bool:
+        nonlocal previous
+        current = marker.read_text(encoding="utf-8") if marker.exists() else ""
+        if previous is None:
+            previous = current
+            return False
+        if current == previous:
+            return False
+        previous = current
+        return True
+
+    result = invoke(
+        tmp_path,
+        "import pathlib,time; p=pathlib.Path('candidate-state'); time.sleep(.08); p.write_text('one'); time.sleep(.12); p.write_text('two'); time.sleep(.08)",
+        policy={"idle_timeout": .14, "hard_timeout": 1.0},
+        progress_probe=changed,
+    )
+
+    assert result.returncode == 0 and not result.timed_out
+    assert StreamEventKind.PROGRESS in kinds(result)
+
 
 def test_streaming_runner_hard_timeout_wins_over_progress(tmp_path: Path) -> None:
     result = invoke(

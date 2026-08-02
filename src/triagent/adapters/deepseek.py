@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -10,7 +11,7 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 from pydantic import ConfigDict
 
@@ -287,6 +288,38 @@ def _parse_stream_output(
     return AgentResult(status=AgentStatus.INVALID_OUTPUT, summary="OpenCode returned non-JSON canonical output")
 
 
+def _worktree_progress_probe(workdir: Path) -> Callable[[], bool]:
+    """Detect candidate-state changes without exposing provider output."""
+    ignored_prefixes = (".triagent-opencode-input-", ".triagent-opencode-output-")
+    previous: str | None = None
+
+    def probe_worktree() -> bool:
+        nonlocal previous
+        try:
+            result = subprocess.run(
+                ["git", "status", "--porcelain=v1", "--untracked-files=all", "--"],
+                cwd=workdir, capture_output=True, text=True, check=False, timeout=1,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if result.returncode != 0:
+            return False
+        records = [
+            line for line in result.stdout.splitlines()
+            if not any(Path(line[3:]).name.startswith(prefix) for prefix in ignored_prefixes)
+        ]
+        fingerprint = hashlib.sha256("\n".join(records).encode("utf-8")).hexdigest()
+        if previous is None:
+            previous = fingerprint
+            return False
+        if fingerprint == previous:
+            return False
+        previous = fingerprint
+        return True
+
+    return probe_worktree
+
+
 def _invoke_stream(
     runner: StreamingProcessRunner,
     argv: Sequence[str],
@@ -295,10 +328,16 @@ def _invoke_stream(
     env: Mapping[str, str],
     secrets: Sequence[str],
     role: AgentRole,
+    progress_probe: Callable[[], bool] | None = None,
 ) -> AgentResult:
     classifier = _OpenCodeStreamClassifier(role)
     try:
-        process = runner.run(argv, cwd, policy, env, is_progress=classifier.progress, is_terminal_result=classifier.terminal)
+        process = runner.run(
+            argv, cwd, policy, env,
+            is_progress=classifier.progress,
+            is_terminal_result=classifier.terminal,
+            progress_probe=progress_probe,
+        )
     except (FileNotFoundError, OSError):
         return AgentResult(status=AgentStatus.UNAVAILABLE, summary="OpenCode executable is unavailable")
     return _parse_stream_output(process, secrets, role)
@@ -656,6 +695,7 @@ class DeepSeekAdapter(AgentAdapter):
                     self._env,
                     self._secrets,
                     request.role,
+                    _worktree_progress_probe(request.workdir),
                 )
             else:
                 result = invoke_opencode_jsonl(
