@@ -13,7 +13,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 
 class PromotionEvidenceError(ValueError):
@@ -199,6 +199,35 @@ def evaluate(evidence: Mapping[str, Any]) -> PromotionEvaluation:
         if not _ISO_UTC.fullmatch(accepted_at):
             raise PromotionEvidenceError("operator_acceptance.accepted_at must be UTC second precision")
         accepted = True
-    # Cutover is categorically not available before the final validated stage.
-    eligible = stage == STAGES[-1] and rollout_stage == "D" and accepted
-    return PromotionEvaluation(True, stage, rollout_stage, supplied_digest, (), eligible)
+    # A single record cannot prove that its claimed prior digests resolve to
+    # real earlier records. ``evaluate_chain`` is required for cutover.
+    return PromotionEvaluation(True, stage, rollout_stage, supplied_digest, (), False)
+
+
+def evaluate_chain(records: Sequence[Mapping[str, Any]]) -> PromotionEvaluation:
+    """Validate an ordered, content-linked promotion record chain."""
+    if not records:
+        raise PromotionEvidenceError("promotion evidence chain is empty")
+    if len(records) > len(STAGES):
+        raise PromotionEvidenceError("promotion evidence chain is too long")
+    prior: list[PromotionEvaluation] = []
+    for index, record in enumerate(records):
+        result = evaluate(record)
+        if result.stage != STAGES[index]:
+            raise PromotionEvidenceError("promotion evidence chain stage order is invalid")
+        expected = [
+            {"stage": earlier.stage, "digest": earlier.evidence_digest}
+            for earlier in prior
+        ]
+        if record.get("prior_stage_digests") != expected:
+            raise PromotionEvidenceError("promotion evidence chain digest linkage is invalid")
+        prior.append(result)
+    final = prior[-1]
+    accepted = isinstance(records[-1].get("operator_acceptance"), Mapping)
+    eligible = (
+        final.stage == STAGES[-1]
+        and final.rollout_stage == "D"
+        and len(prior) == len(STAGES)
+        and accepted
+    )
+    return PromotionEvaluation(True, final.stage, final.rollout_stage, final.evidence_digest, (), eligible)

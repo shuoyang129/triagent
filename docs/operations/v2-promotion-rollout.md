@@ -8,8 +8,8 @@ cutover, the public `triagent`, its environment, profiles, wrappers, and
 
 Retain immutable test/replay output outside an implementer worktree, hash each
 artifact, and record it in the schema at
-`docs/evidence/promotion/v2-promotion-evidence.schema.json`.  Evaluate the
-record offline with `triagent.promotion.evaluate`; this parses local data only.
+`docs/evidence/promotion/v2-promotion-evidence.schema.json`.  Evaluate a record offline with `triagent.promotion.evaluate`; evaluate a complete
+chain with `triagent.promotion.evaluate_chain`; this parses local data only.
 It never constructs a provider adapter, launches a provider, or changes an
 entry point.
 
@@ -61,7 +61,7 @@ and v2 tasks stay with v2 for audit and recovery.
 ## Cutover hold point
 
 No code path in the evaluator or this runbook may repoint public `triagent`.
-Even a final-stage, rollout-D evidence record is not cutover eligible until it
+Even a final-stage, rollout-D evidence chain is not cutover eligible until it
 contains a separately recorded `operator_acceptance` object with exactly:
 
 ```json

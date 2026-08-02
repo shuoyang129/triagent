@@ -12,6 +12,7 @@ from triagent.promotion import (
     SAFETY_GATES,
     STAGES,
     evaluate,
+    evaluate_chain,
     evidence_digest,
 )
 
@@ -45,12 +46,36 @@ def test_evaluator_accepts_complete_offline_stage_and_never_implies_cutover() ->
     assert evaluation.cutover_eligible is False
 
 
-def test_final_stage_requires_explicit_operator_acceptance_for_cutover_eligibility() -> None:
-    without_acceptance = evaluate(_evidence(STAGES[-1], "D"))
-    with_acceptance = evaluate(_evidence(STAGES[-1], "D", accepted=True))
+def _chain(*, accepted: bool = True) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for index, stage in enumerate(STAGES):
+        record = _evidence(stage, "D" if stage == STAGES[-1] else "A", accepted=accepted and stage == STAGES[-1])
+        record["prior_stage_digests"] = [
+            {"stage": prior["stage"], "digest": prior["digest"]}
+            for prior in records
+        ]
+        record["digest"] = evidence_digest(record)
+        records.append(record)
+    return records
 
-    assert without_acceptance.cutover_eligible is False
-    assert with_acceptance.cutover_eligible is True
+
+def test_final_stage_requires_a_verified_chain_for_cutover_eligibility() -> None:
+    single = evaluate(_evidence(STAGES[-1], "D", accepted=True))
+    assert single.cutover_eligible is False
+
+    chain = evaluate_chain(_chain())
+    assert chain.cutover_eligible is True
+
+
+def test_chain_rejects_forged_prior_digest_linkage() -> None:
+    records = _chain()
+    prior = records[-1]["prior_stage_digests"]
+    assert isinstance(prior, list)
+    prior[0]["digest"] = "0" * 64
+    records[-1]["digest"] = evidence_digest(records[-1])
+
+    with pytest.raises(PromotionEvidenceError, match="digest linkage"):
+        evaluate_chain(records)
 
 
 @pytest.mark.parametrize(
