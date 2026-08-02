@@ -207,7 +207,6 @@ class _OpenCodeStreamClassifier:
                 continue
             if not isinstance(event, dict):
                 continue
-            progressed = True
             part = event.get("part")
             if not (
                 event.get("type") == "text"
@@ -216,7 +215,13 @@ class _OpenCodeStreamClassifier:
                 and isinstance(part.get("text"), str)
             ):
                 continue
-            self._messages.append(part["text"])
+            text_part = part["text"]
+            # A syntactically valid transport record is only liveness.  OpenCode
+            # can emit status records indefinitely without useful provider work.
+            if not text_part.strip():
+                continue
+            progressed = True
+            self._messages.append(text_part)
             for start in range(len(self._messages) - 1, -1, -1):
                 payload, diagnostic = _decode_json_object("".join(self._messages[start:]))
                 if diagnostic is not None or payload is None:

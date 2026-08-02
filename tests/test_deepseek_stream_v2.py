@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from triagent.adapters.base import AgentRequest, AgentRole, AgentStatus
-from triagent.adapters.deepseek import DeepSeekAdapter
+from triagent.adapters.deepseek import DeepSeekAdapter, _OpenCodeStreamClassifier
 from triagent.adapters.process import ProcessResult, StreamingProcessResult
 
 
@@ -127,6 +127,15 @@ def test_stream_v2_handles_fragmented_structured_output_without_provider(tmp_pat
     argv, cwd, policy, _env, stdin = stream.calls[0]
     assert argv[:2] == ["opencode-offline", "run"] and cwd == tmp_path
     assert policy.hard_timeout == 19 and stdin is None
+
+
+def test_stream_v2_status_records_do_not_refresh_meaningful_progress() -> None:
+    classifier = _OpenCodeStreamClassifier(AgentRole.IMPLEMENTER)
+
+    assert classifier.progress("stdout", "{\"type\":\"status\",\"state\":\"running\"}\n") is False
+    assert classifier.progress("stdout", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"   \"}}\n") is False
+    assert classifier.progress("stderr", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"provider output\"}}\n") is False
+    assert classifier.progress("stdout", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"provider output\"}}\n") is True
 
 
 def test_stream_v2_invalid_output_recovers_tracked_edit_and_cleans_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
