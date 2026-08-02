@@ -185,7 +185,7 @@ def _failure_diagnostic(process: ProcessResult) -> DeepSeekDiagnostic:
 
 
 class _OpenCodeStreamClassifier:
-    """Treat only complete OpenCode JSONL records as meaningful progress."""
+    """Classify real OpenCode provider records without trusting wrapper liveness."""
 
     def __init__(self, role: AgentRole) -> None:
         self._role = role
@@ -217,10 +217,12 @@ class _OpenCodeStreamClassifier:
             ):
                 continue
             text_part = part["text"]
-            # A syntactically valid transport record is only liveness.  OpenCode
-            # can emit status records indefinitely without useful provider work.
+            # A non-empty text record is a provider-produced event, unlike status
+            # frames or wrapper liveness.  It can refresh idle, but the hard
+            # timeout still bounds a provider that keeps emitting prose.
             if not text_part.strip():
                 continue
+            progressed = True
             self._messages.append(text_part)
             for start in range(len(self._messages) - 1, -1, -1):
                 payload, diagnostic = _decode_json_object("".join(self._messages[start:]))

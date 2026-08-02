@@ -135,8 +135,8 @@ def test_stream_v2_status_records_do_not_refresh_meaningful_progress() -> None:
     assert classifier.progress("stdout", "{\"type\":\"status\",\"state\":\"running\"}\n") is False
     assert classifier.progress("stdout", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"   \"}}\n") is False
     assert classifier.progress("stderr", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"provider output\"}}\n") is False
-    assert classifier.progress("stdout", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"provider prose\"}}\n") is False
-    assert classifier.progress("stdout", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"provider output\"}}\n") is False
+    assert classifier.progress("stdout", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"provider prose\"}}\n") is True
+    assert classifier.progress("stdout", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"provider output\"}}\n") is True
 
 def test_worktree_progress_probe_ignores_transport_and_detects_candidate_change(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
