@@ -220,7 +220,6 @@ class _OpenCodeStreamClassifier:
             # can emit status records indefinitely without useful provider work.
             if not text_part.strip():
                 continue
-            progressed = True
             self._messages.append(text_part)
             for start in range(len(self._messages) - 1, -1, -1):
                 payload, diagnostic = _decode_json_object("".join(self._messages[start:]))
@@ -231,6 +230,7 @@ class _OpenCodeStreamClassifier:
                 except ValueError:
                     continue
                 self.terminal_seen = True
+                progressed = True
                 break
         return progressed
 

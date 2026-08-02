@@ -135,7 +135,8 @@ def test_stream_v2_status_records_do_not_refresh_meaningful_progress() -> None:
     assert classifier.progress("stdout", "{\"type\":\"status\",\"state\":\"running\"}\n") is False
     assert classifier.progress("stdout", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"   \"}}\n") is False
     assert classifier.progress("stderr", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"provider output\"}}\n") is False
-    assert classifier.progress("stdout", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"provider output\"}}\n") is True
+    assert classifier.progress("stdout", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"provider prose\"}}\n") is False
+    assert classifier.progress("stdout", "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"provider output\"}}\n") is False
 
 
 def test_stream_v2_invalid_output_recovers_tracked_edit_and_cleans_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
