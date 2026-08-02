@@ -149,12 +149,16 @@ elif [[ ( "${contract}" == *"tests/test_g1_sonic_minimal_motion.py"* \
    || "${contract}" == *"Harden the M39 v25 damping-stop CRC cache contract"* \
    || "${contract}" == *"M39 physical G1 repair review v27d"* \
    || "${contract}" == *"M39 physical G1 writer-close half-open review"* \
+   || "${contract}" == *"M39 physical G1 writer-observation timestamp review"* \
    || "${contract}" == *"M39 physical restore repair final pre-active review"* ]]; then
   m39_focused_expected="135 passed"
   m39_protection_expected="329 passed, 18 subtests passed"
   if [[ "${contract}" == *"M39 physical G1 writer-close half-open review"* ]]; then
     m39_focused_expected="136 passed"
     m39_protection_expected="330 passed, 18 subtests passed"
+  elif [[ "${contract}" == *"M39 physical G1 writer-observation timestamp review"* ]]; then
+    m39_focused_expected="137 passed"
+    m39_protection_expected="331 passed, 18 subtests passed"
   fi
   test_scope="m39-exact-${m39_focused_expected%% *}-${m39_protection_expected%% *}-15"
   test_status=0

@@ -322,6 +322,7 @@ def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
     assert "Harden the M39 v25 damping-stop CRC cache contract" in route_condition
     assert "M39 physical G1 repair review v27d" in route_condition
     assert "M39 physical G1 writer-close half-open review" in route_condition
+    assert "M39 physical G1 writer-observation timestamp review" in route_condition
     for required in (
         "tests/test_m39_minimal_motion_adapter.py",
         "services/g1_telemetry/sonic_minimal_motion.py",
@@ -352,8 +353,10 @@ def test_codex_adapter_has_exact_m39_minimal_motion_scope() -> None:
         "configs/g1_sonic_minimal_motion_policy.json",
         "135 passed",
         "136 passed",
+        "137 passed",
         "329 passed, 18 subtests passed",
         "330 passed, 18 subtests passed",
+        "331 passed, 18 subtests passed",
         "15 passed",
         "dd888cfb4216067a7b24bff1f9ba01909b7335c821b94112d384fb77ba897d69",
         "4083b391964332e77b63306d4f2672bbba23436f3defb681cb22e75246564213",
