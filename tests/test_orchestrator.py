@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,9 @@ from triagent.adapters.fake import FakeAgent
 from triagent.adapters.cursor import CursorAdapter
 from triagent.adapters.codex import CodexAdapter
 from triagent.adapters.antigravity import AntigravityAdapter
+from triagent.adapters.deepseek import DeepSeekAdapter
 from triagent.domain import Budget, RiskLevel, TaskSpec, TaskState
+from triagent.git_workspace import GitWorkspace
 from triagent.orchestrator import Orchestrator
 from triagent.store import LeaseConflict, TaskStore
 
@@ -341,4 +344,81 @@ def test_live_review_durable_result_recovers_after_crash_without_second_provider
 
     assert replayed is not None and replayed.data["evidence"] == ["offline-proof"]
     assert calls == [adapter_name]
+    assert store.runtime(task.id).completed_calls == 1
+
+
+def test_live_implementation_durable_result_recovers_after_crash_without_second_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "test.invalid"],
+        ["git", "config", "user.name", "TriAgent Test"],
+        ["git", "add", "README.md"],
+        ["git", "commit", "-qm", "base"],
+    ):
+        subprocess.run(command, cwd=repo, check=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    store = TaskStore(tmp_path / "data")
+    task = store.create_task(TaskSpec(
+        goal="durable implementation", scope=[str(repo)], acceptance=["offline"],
+        budget=Budget(max_agent_calls=4, max_minutes=60, max_usd=10),
+    ))
+    worktree = store.runs_root / task.id / "worktree"
+    worktree.rmdir()
+    GitWorkspace.create(repo, task.id, destination=worktree)
+    store.set_workspace(task.id, str(repo), base, f"triagent/{task.id}")
+    store.record_runtime_manifest(task.id, {"runtime": "live-v2-test"})
+    store.transition(task.id, TaskState.SPEC, TaskState.IMPLEMENT, "test")
+
+    calls: list[str] = []
+    implementer = DeepSeekAdapter(
+        enabled=True, billing_confirmed=True, live_confirmed=True, estimated_usd=1.0,
+    )
+
+    def successful_implementation(request):
+        calls.append("deepseek")
+        (request.workdir / "README.md").write_text("durable candidate\n", encoding="utf-8")
+        return AgentResult(
+            status=AgentStatus.SUCCEEDED,
+            data={"status": "passed", "evidence": ["offline-proof"], "artifacts": [], "changed_paths": ["README.md"]},
+            actual_usd=1.0,
+        )
+
+    monkeypatch.setattr(implementer, "run", successful_implementation)
+    verifier = CodexAdapter(estimated_usd=1.0)
+    reviewer = AntigravityAdapter(estimated_usd=1.0)
+    first = Orchestrator(store, implementer, verifier, reviewer, profile_digest="c" * 64)
+    owner = "owner-first"
+    store.acquire_lease(task.id, owner, 600)
+    first._lease_owner = owner
+    original = store.record_durable_completion
+
+    def crash_after_atomic_commit(**kwargs):
+        original(**kwargs)
+        raise RuntimeError("injected crash after durable commit")
+
+    monkeypatch.setattr(store, "record_durable_completion", crash_after_atomic_commit)
+    request = first._request(task.id, AgentRole.IMPLEMENTER, "implementation-result-v1", implementer)
+    with pytest.raises(RuntimeError, match="durable commit"):
+        first._call(task.id, TaskState.IMPLEMENT, implementer, request)
+    assert calls == ["deepseek"]
+    assert store.workspace(task.id)["reviewed_commit"]
+    store.release_lease(task.id, owner)
+
+    monkeypatch.setattr(store, "record_durable_completion", original)
+    restarted = Orchestrator(store, implementer, verifier, reviewer, profile_digest="c" * 64)
+    resumed_owner = "owner-restarted"
+    store.acquire_lease(task.id, resumed_owner, 600)
+    restarted._lease_owner = resumed_owner
+    replayed = restarted._call(task.id, TaskState.IMPLEMENT, implementer, request)
+
+    assert replayed is not None and replayed.data["evidence"] == ["offline-proof"]
+    assert calls == ["deepseek"]
     assert store.runtime(task.id).completed_calls == 1

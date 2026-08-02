@@ -188,26 +188,42 @@ class Orchestrator:
             timeout_seconds=timeout_seconds,
         )
 
-    def _durable_context(self, task_id: str, state: TaskState, adapter: AgentAdapter, request: AgentRequest, call_id: str | None = None):
-        """Return the exact v2 durable binding for live review calls, if enabled."""
+    def _uses_durable_implementation(self, adapter: AgentAdapter, request: AgentRequest) -> bool:
         identity, _ = _contract(adapter)
-        if (
-            request.role not in {AgentRole.VERIFIER, AgentRole.REVIEWER}
-            or identity not in {"codex", "antigravity"}
-            or self.profile_digest is None
-        ):
+        return (
+            request.role is AgentRole.IMPLEMENTER
+            and identity in {"cursor", "deepseek"}
+            and self.profile_digest is not None
+        )
+
+    def _durable_context(self, task_id: str, state: TaskState, adapter: AgentAdapter, request: AgentRequest, call_id: str | None = None):
+        """Return the exact v2 durable binding for a live provider call, if enabled."""
+        identity, _ = _contract(adapter)
+        implementer = self._uses_durable_implementation(adapter, request)
+        review = (
+            request.role in {AgentRole.VERIFIER, AgentRole.REVIEWER}
+            and identity in {"codex", "antigravity"}
+            and self.profile_digest is not None
+        )
+        if not implementer and not review:
             return None
         runtime_digest = self.store.runtime_manifest_digest(task_id)
         workspace = self.store.workspace(task_id)
-        if runtime_digest is None or workspace is None or not workspace["reviewed_commit"]:
+        if runtime_digest is None:
             return None
-        candidate_commit = workspace["reviewed_commit"]
+        candidate_commit = workspace["reviewed_commit"] if workspace is not None else None
+        if review and (workspace is None or not candidate_commit):
+            return None
+        if implementer and call_id is None and (workspace is None or not candidate_commit):
+            return None
+        # Implementation input precedes the candidate.  The candidate is bound
+        # by the durable result after the trusted controller materializes it.
         input_manifest = {
             "schema_version": 1, "state": state.value, "role": request.role.value,
             "provider": identity, "output_schema": request.output_schema,
             "task_sha256": hashlib.sha256(request.task_file.read_bytes()).hexdigest(),
             "handoff_sha256": hashlib.sha256(request.handoff_file.read_bytes()).hexdigest() if request.handoff_file else None,
-            "candidate_commit": candidate_commit,
+            "candidate_commit": None if implementer else candidate_commit,
         }
         input_digest = _digest(input_manifest)
         if call_id is None:
@@ -254,6 +270,11 @@ class Orchestrator:
             expected = {"provider": identity, "role": request.role.value, "result_digest": record.result_digest, "candidate_commit": candidate_commit, "outcome": outcome}
             if ledger != expected:
                 raise CompletionError("consumed completion ledger is missing or mismatched")
+        if (
+            self._uses_durable_implementation(adapter, request)
+            and self.store.runtime_manifest_digest(task_id) is not None
+        ):
+            self.store.restore_candidate_worktree(task_id)
         return replay
 
     def _call(
@@ -304,6 +325,31 @@ class Orchestrator:
         if self._lease_owner:
             self.store.renew_lease(task_id, self._lease_owner, lease_seconds)
         actual = 0.0 if estimate.zero_cost_enforced else result.actual_usd
+        if (
+            self._uses_durable_implementation(adapter, request)
+            and self.store.runtime_manifest_digest(task_id) is not None
+            and result.status is AgentStatus.SUCCEEDED
+        ):
+            try:
+                cursor_implementation = type(self.implementer) is CursorAdapter
+                self.store.materialize_reviewed_commit(
+                    task_id,
+                    None if cursor_implementation else result.data.get("changed_paths"),
+                    require_changes=cursor_implementation,
+                )
+                self.store.restore_candidate_worktree(task_id)
+            except ValueError:
+                diagnostic = "candidate-materialization-failed"
+                self.store.interrupt_agent_call(task_id, call_id, diagnostic)
+                self._record_transport_failure(task_id, request.role, diagnostic)
+                self.store.transition_recoverable(
+                    task_id, state, self._failed_stage(request.role), diagnostic
+                )
+                return None
+            durable = self._durable_context(task_id, state, adapter, request, call_id)
+            if durable is None or durable[2] is None:
+                raise CompletionError("implementation durable binding unavailable")
+            control, input_manifest, candidate_commit = durable
         if durable is not None and result.status is AgentStatus.SUCCEEDED:
             outcome = dict(result.data)
             self._outcome(self._failed_stage(request.role), result, status="failed" if outcome.get("status") == "failed" else "passed")
@@ -407,33 +453,40 @@ class Orchestrator:
             if result is None:
                 return self.store.load(task_id).state
             cursor_implementation = type(self.implementer) is CursorAdapter
-            try:
-                self.store.materialize_reviewed_commit(
-                    task_id,
-                    None if cursor_implementation else result.data.get("changed_paths"),
-                    require_changes=cursor_implementation,
-                )
-                if self.store.workspace(task_id) is not None:
-                    self.store.restore_candidate_worktree(task_id)
-            except ValueError as error:
-                if cursor_implementation and str(error) == "candidate manifest rejected: no changes":
-                    diagnostic = "cursor-no-worktree-change"
-                    self.store.record_outcome(
+            request = self._request(
+                task_id, AgentRole.IMPLEMENTER, "implementation-result-v1", self.implementer
+            )
+            if not (
+                self._uses_durable_implementation(self.implementer, request)
+                and self.store.runtime_manifest_digest(task_id) is not None
+            ):
+                try:
+                    self.store.materialize_reviewed_commit(
                         task_id,
-                        StageOutcome(
-                            stage="implement",
-                            status="failed",
-                            summary="requires-repair",
-                            diagnostic=diagnostic,
-                        ),
+                        None if cursor_implementation else result.data.get("changed_paths"),
+                        require_changes=cursor_implementation,
                     )
-                    return self.store.transition_recoverable(
-                        task_id,
-                        state,
-                        "implement",
-                        diagnostic,
-                    ).state
-                raise
+                    if self.store.workspace(task_id) is not None:
+                        self.store.restore_candidate_worktree(task_id)
+                except ValueError as error:
+                    if cursor_implementation and str(error) == "candidate manifest rejected: no changes":
+                        diagnostic = "cursor-no-worktree-change"
+                        self.store.record_outcome(
+                            task_id,
+                            StageOutcome(
+                                stage="implement",
+                                status="failed",
+                                summary="requires-repair",
+                                diagnostic=diagnostic,
+                            ),
+                        )
+                        return self.store.transition_recoverable(
+                            task_id,
+                            state,
+                            "implement",
+                            diagnostic,
+                        ).state
+                    raise
             self.store.record_outcome(task_id, self._outcome("implement", result))
             self._write_handoff(task_id)
             return self.store.transition(task_id, state, TaskState.VERIFY, "implementation-complete").state
