@@ -211,6 +211,32 @@ def test_agent_call_lease_covers_request_timeout_through_post_call_renewal(
     assert renewals == [961, 961]
 
 
+def test_stream_hard_timeout_extends_controller_lease(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    implementer = FakeAgent.succeeding("implemented")
+    implementer._stream_policy = SimpleNamespace(hard_timeout=2700)
+    orchestrator, store = make_orchestrator(tmp_path, FakeAgent.succeeding("clean"), implementer)
+    task = store.create_task(make_spec())
+    request = orchestrator._request(task.id, AgentRole.IMPLEMENTER, "implementation-result-v1", implementer)
+    owner = "stream-lease-owner"
+    store.acquire_lease(task.id, owner, 600)
+    orchestrator._lease_owner = owner
+    renewals: list[float] = []
+    original_renew = store.renew_lease
+
+    def tracked(task_id: str, lease_owner: str, seconds: float) -> None:
+        renewals.append(seconds)
+        original_renew(task_id, lease_owner, seconds)
+
+    monkeypatch.setattr(store, "renew_lease", tracked)
+    try:
+        assert orchestrator._call(task.id, TaskState.SPEC, implementer, request) is not None
+    finally:
+        orchestrator._lease_owner = None
+        store.release_lease(task.id, owner)
+
+    assert renewals == [2760.0, 2760.0]
+
+
 def test_repair_limit_override_is_bounded_and_opt_in(monkeypatch) -> None:
     assert Orchestrator._repair_limit(RiskLevel.ROBOT_SAFETY) == 3
     monkeypatch.setenv("TRIAGENT_REPAIR_ATTEMPT_LIMIT", "6")

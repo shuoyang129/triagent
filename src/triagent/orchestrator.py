@@ -281,6 +281,14 @@ class Orchestrator:
             self.store.restore_candidate_worktree(task_id)
         return replay
 
+
+    def _lease_seconds(self, adapter: AgentAdapter, request: AgentRequest) -> float:
+        policy = getattr(adapter, "_stream_policy", None)
+        hard = getattr(policy, "hard_timeout", request.timeout_seconds)
+        if isinstance(hard, bool) or not isinstance(hard, (int, float)) or hard <= 0:
+            raise ValueError("adapter stream hard timeout is invalid")
+        return max(_BASE_LEASE_SECONDS, float(hard) + _AGENT_LEASE_SAFETY_SECONDS)
+
     def _refresh_deepseek_readiness(self, task_id: str, adapter: AgentAdapter) -> str | None:
         if (
             type(adapter) is not DeepSeekAdapter
@@ -322,10 +330,7 @@ class Orchestrator:
         identity,roles=_contract(adapter)
         if request.role not in roles or request.agent_identity != identity:
             raise ValueError("adapter identity/role mismatch")
-        lease_seconds = max(
-            _BASE_LEASE_SECONDS,
-            request.timeout_seconds + _AGENT_LEASE_SAFETY_SECONDS,
-        )
+        lease_seconds = self._lease_seconds(adapter, request)
         if self._lease_owner:
             self.store.renew_lease(task_id, self._lease_owner, lease_seconds)
         estimate=adapter.estimate_cost(request)
