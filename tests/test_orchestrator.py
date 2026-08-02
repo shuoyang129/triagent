@@ -322,6 +322,21 @@ def test_failed_agent_call_persists_only_allowlisted_diagnostic_code(
     assert row["diagnostic"] == diagnostic_code
 
 
+def test_adapter_exception_persists_safe_exception_category(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    implementer = FakeAgent.succeeding("implemented")
+    orchestrator, store = make_orchestrator(tmp_path, FakeAgent.succeeding("clean"), implementer)
+    task = store.create_task(make_spec())
+
+    def crash(_request):
+        raise RuntimeError("provider text is never persisted")
+
+    monkeypatch.setattr(implementer, "run", crash)
+    assert orchestrator.run_until_blocked(task.id) is TaskState.FAILED_RECOVERABLE
+    with store._connect() as connection:
+        row = connection.execute("SELECT diagnostic FROM agent_calls WHERE task_id=?", (task.id,)).fetchone()
+    assert row["diagnostic"] == "adapter-exception-runtimeerror"
+
+
 @pytest.mark.parametrize(
     ("adapter_name", "role", "stage", "schema"),
     [

@@ -45,7 +45,18 @@ _SAFE_DIAGNOSTICS=frozenset({
     "transport-acl-setup-failed",
     "transport-acl-verification-failed",
     "transport-cleanup-failed",
+    "adapter-exception-runtimeerror",
+    "adapter-exception-valueerror",
+    "adapter-exception-typeerror",
+    "adapter-exception-oserror",
+    "adapter-exception-timeouterror",
+    "adapter-exception-unknown",
 })
+def _adapter_exception_diagnostic(error: BaseException) -> str:
+    name = type(error).__name__.lower()
+    return f"adapter-exception-{name}" if name in {"runtimeerror", "valueerror", "typeerror", "oserror", "timeouterror"} else "adapter-exception-unknown"
+
+
 def _contract(adapter):
     if type(adapter) is FakeAgent: return "fake",frozenset({AgentRole.IMPLEMENTER,AgentRole.VERIFIER,AgentRole.REVIEWER})
     try: return _TRUSTED[type(adapter)]
@@ -347,8 +358,8 @@ class Orchestrator:
             control.write_input_manifest(input_manifest)
             control.append_event({"event": "provider-started"})
         try: result = adapter.run(request)
-        except BaseException:
-            diagnostic = "adapter-exception"
+        except BaseException as error:
+            diagnostic = _adapter_exception_diagnostic(error)
             self.store.interrupt_agent_call(task_id, call_id, diagnostic)
             self._record_transport_failure(task_id, request.role, diagnostic)
             self.store.transition_recoverable(
