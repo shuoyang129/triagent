@@ -389,6 +389,7 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
             orchestrator = Orchestrator(
                 store, cursor if choice.name == "cursor" else deepseek, codex, antigravity,
                 profile_digest=_profile_digest(config),
+                implementer_probe_estimated_usd=probe_cost,
             )
         with _recover_interruption():
             state = orchestrator.run_until_blocked(task.id)

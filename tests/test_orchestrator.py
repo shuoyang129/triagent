@@ -1,5 +1,7 @@
 import subprocess
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -139,6 +141,28 @@ def test_runtime_counters_survive_store_reopen(tmp_path: Path) -> None:
     orchestrator.run_until_blocked(task.id)
     reopened = TaskStore(tmp_path)
     assert reopened.runtime(task.id).agent_calls == 1
+
+
+def test_expired_deepseek_readiness_refresh_is_budgeted_before_repair(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = TaskStore(tmp_path / "data")
+    task = store.create_task(make_spec(max_calls=4).model_copy(update={"budget": Budget(max_agent_calls=4, max_minutes=60, max_usd=10)}))
+    adapter = DeepSeekAdapter(enabled=True, billing_confirmed=True, live_confirmed=True, estimated_usd=1.0)
+    orchestrator = Orchestrator(store, adapter, FakeAgent.succeeding("verify"), FakeAgent.succeeding("review"), implementer_probe_estimated_usd=.25)
+    store.acquire_lease(task.id, "owner", 600)
+    orchestrator._lease_owner = "owner"
+    calls: list[str] = []
+
+    def refreshed():
+        calls.append("probe")
+        adapter._ready_until = time.monotonic() + 60
+        return SimpleNamespace(available=True, ready=True)
+
+    monkeypatch.setattr(adapter, "capabilities", refreshed)
+
+    assert orchestrator._refresh_deepseek_readiness(task.id, adapter) is None
+    assert calls == ["probe"]
+    assert store.runtime(task.id).agent_calls == 1
+    assert store.runtime(task.id).usd_spent == .25
 
 
 def test_agent_call_lease_covers_request_timeout_through_post_call_renewal(

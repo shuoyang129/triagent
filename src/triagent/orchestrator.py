@@ -281,6 +281,25 @@ class Orchestrator:
             self.store.restore_candidate_worktree(task_id)
         return replay
 
+    def _refresh_deepseek_readiness(self, task_id: str, adapter: AgentAdapter) -> str | None:
+        if (
+            type(adapter) is not DeepSeekAdapter
+            or adapter.ready_for_call()
+            or self.implementer_probe_estimated_usd is None
+        ):
+            return None
+        if self._lease_owner is None:
+            raise LeaseConflict("controller lease is required for readiness refresh")
+        self.store.assert_paid_operations_available(
+            task_id, (self.implementer_probe_estimated_usd,), lease_owner=self._lease_owner
+        )
+        capability = self.store.execute_paid_operation(
+            task_id, self.implementer_probe_estimated_usd, adapter.capabilities, lease_owner=self._lease_owner
+        )
+        if capability.available and capability.ready is True:
+            return None
+        return getattr(capability, "diagnostic_code", None) or "deepseek-api-failed"
+
     def _call(
         self,
         task_id: str,
@@ -295,6 +314,11 @@ class Orchestrator:
         recovered = self._recover_durable_result(task_id, state, adapter, request)
         if recovered is not None:
             return recovered
+        readiness_diagnostic = self._refresh_deepseek_readiness(task_id, adapter) if request.role is AgentRole.IMPLEMENTER else None
+        if readiness_diagnostic is not None:
+            self._record_transport_failure(task_id, request.role, readiness_diagnostic)
+            self.store.transition_recoverable(task_id, state, self._failed_stage(request.role), readiness_diagnostic)
+            return None
         identity,roles=_contract(adapter)
         if request.role not in roles or request.agent_identity != identity:
             raise ValueError("adapter identity/role mismatch")

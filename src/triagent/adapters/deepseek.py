@@ -571,13 +571,17 @@ class DeepSeekAdapter(AgentAdapter):
             **base,
         )
 
+    def ready_for_call(self) -> bool:
+        """True only while the last paid readiness check is still fresh."""
+        return self._ready_until >= time.monotonic()
+
     def run(self, request: AgentRequest) -> AgentResult:
         if not (
             self._enabled
             and self._billing
             and self._live_confirmed
             and self._env.get("DEEPSEEK_API_KEY")
-            and self._ready_until >= time.monotonic()
+            and self.ready_for_call()
         ):
             return AgentResult(
                 status=AgentStatus.UNAVAILABLE,
