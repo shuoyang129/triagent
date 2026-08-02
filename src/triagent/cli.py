@@ -34,6 +34,7 @@ from triagent.runtime_manifest import (
 )
 from triagent.adapters.process import StreamPolicy
 from triagent.timeout_policy import Provider, Stage, TaskSize, default_v2_matrix
+from triagent.task_sizing import TaskSizingEvidence, classify_task_size
 from triagent.store import TaskStore
 from triagent import __version__
 
@@ -186,6 +187,42 @@ def _record_read_only_timeouts(store: TaskStore, task_id: str, selections: dict[
     path.write_text(json.dumps({"schema_version": 1, "selections": selections}, sort_keys=True), encoding="utf-8")
 
 
+def _live_stream_policy(sizing: TaskSizingEvidence | None, enabled: bool, provider: Provider, stage: Stage) -> tuple[StreamPolicy | None, dict[str, object] | None]:
+    if sizing is None or not enabled:
+        return None, None
+    selection = default_v2_matrix().select(provider, stage, sizing.size)
+    return StreamPolicy(**selection.policy.as_dict()), selection.persistable()
+
+
+def _live_timeout_record(sizing: TaskSizingEvidence | None, streams: dict[str, bool], implementer: str) -> dict[str, object] | None:
+    if sizing is None:
+        return None
+    selected: dict[str, object] = {"task_sizing": sizing.persistable(), "selections": {}}
+    if streams[implementer]:
+        matrix = default_v2_matrix()
+        if matrix.select(Provider(implementer), Stage.IMPLEMENT, sizing.size).policy != matrix.select(Provider(implementer), Stage.REPAIR, sizing.size).policy:
+            raise ValueError("stream implementation and repair policies must match until adapters are stage-aware")
+    routes = {
+        "implement": (Provider(implementer), Stage.IMPLEMENT, implementer),
+        "repair": (Provider(implementer), Stage.REPAIR, implementer),
+        "verify": (Provider.CODEX, Stage.VERIFY, "codex"),
+        "review": (Provider.ANTIGRAVITY, Stage.REVIEW, "antigravity"),
+    }
+    for name, (provider, stage, agent) in routes.items():
+        if streams[agent]:
+            selected["selections"][name] = default_v2_matrix().select(provider, stage, sizing.size).persistable()
+    if not selected["selections"]:
+        return None
+    payload: dict[str, object] = {"schema_version": 1, "kind": "v2-stage-size-selections", **selected}
+    payload["digest"] = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return payload
+
+
+def _record_live_timeouts(store: TaskStore, task_id: str, record: dict[str, object] | None) -> None:
+    if record is not None:
+        (store.runs_root / task_id / "timeout-selections.json").write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+
+
 def _deepseek_options(config: dict) -> dict[str, object]:
     section = config.get("agents", {}).get("deepseek", {})
     model = section.get("model", "deepseek/deepseek-v4-pro")
@@ -210,11 +247,11 @@ def _fake_runtime_manifest() -> dict[str, object]:
         providers={role: ("fake", ("fake",), None, "declared-fake") for role in ("implementer", "verifier", "reviewer")},
     )
 
-def _live_runtime_manifest(config: dict, *, profile_digest: str, implementer: str) -> dict[str, object]:
+def _live_runtime_manifest(config: dict, *, profile_digest: str, implementer: str, timeout_record: dict[str, object] | None = None) -> dict[str, object]:
     """Build the immutable live binding without probing a provider."""
     if implementer not in {"cursor", "deepseek"}:
         raise ValueError("live implementer is invalid")
-    return build_runtime_manifest(
+    manifest = build_runtime_manifest(
         profile_digest=profile_digest,
         providers={
             "implementer": (implementer, _profile_command(config, implementer), _deepseek_options(config)["model"] if implementer == "deepseek" else None, None),
@@ -222,6 +259,9 @@ def _live_runtime_manifest(config: dict, *, profile_digest: str, implementer: st
             "reviewer": ("antigravity", _profile_command(config, "antigravity"), None, None),
         },
     )
+    if timeout_record is not None:
+        manifest["timeout_policy"] = timeout_record
+    return manifest
 
 
 
@@ -326,19 +366,26 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
             orchestrator = Orchestrator(store, FakeAgent([success]), FakeAgent([success]), FakeAgent([success]), profile_digest="fake-v1")
         else:
             assert config is not None
-            cursor = CursorAdapter(command=_profile_command(config, "cursor"), estimated_usd=_priced(config,"cursor"), stream_v2=stream_v2["cursor"])
-            codex = CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config,"codex"), stream_v2=stream_v2["codex"])
-            antigravity = AntigravityAdapter(command=_profile_command(config, "antigravity"), estimated_usd=_priced(config,"antigravity"), stream_v2=stream_v2["antigravity"])
+            sizing = classify_task_size(task.spec, repo) if any(stream_v2.values()) else None
+            cursor_policy, _ = _live_stream_policy(sizing, stream_v2["cursor"], Provider.CURSOR, Stage.IMPLEMENT)
+            codex_policy, _ = _live_stream_policy(sizing, stream_v2["codex"], Provider.CODEX, Stage.VERIFY)
+            agy_policy, _ = _live_stream_policy(sizing, stream_v2["antigravity"], Provider.ANTIGRAVITY, Stage.REVIEW)
+            deepseek_policy, _ = _live_stream_policy(sizing, stream_v2["deepseek"], Provider.DEEPSEEK, Stage.IMPLEMENT)
+            cursor = CursorAdapter(command=_profile_command(config, "cursor"), estimated_usd=_priced(config,"cursor"), stream_v2=stream_v2["cursor"], stream_policy=cursor_policy)
+            codex = CodexAdapter(command=_profile_command(config, "codex"), estimated_usd=_priced(config,"codex"), stream_v2=stream_v2["codex"], stream_policy=codex_policy)
+            antigravity = AntigravityAdapter(command=_profile_command(config, "antigravity"), estimated_usd=_priced(config,"antigravity"), stream_v2=stream_v2["antigravity"], stream_policy=agy_policy)
             cursor_caps=cursor.capabilities() if cursor_enabled else False
             capabilities={"cursor":cursor_caps,"deepseek":False}
             if not bool(getattr(cursor_caps, "available", False)) and fallback_enabled:
-                deepseek=DeepSeekAdapter(enabled=True,billing_confirmed=billing_confirmed,live_confirmed=live_confirmed,estimated_usd=fallback_estimate,stream_v2=stream_v2["deepseek"],**_deepseek_options(config))
+                deepseek=DeepSeekAdapter(enabled=True,billing_confirmed=billing_confirmed,live_confirmed=live_confirmed,estimated_usd=fallback_estimate,stream_v2=stream_v2["deepseek"],stream_policy=deepseek_policy,**_deepseek_options(config))
                 deepseek_caps=store.execute_paid_operation(task.id,probe_cost,deepseek.capabilities)
                 capabilities["deepseek"]=deepseek_caps
                 if not deepseek_caps.available:
                     setup_diagnostic = deepseek_caps.diagnostic_code or "deepseek-api-failed"
             choice = ImplementationRouter().choose(cursor_usage=0.0, capabilities=capabilities)
-            store.record_runtime_manifest(task.id, _live_runtime_manifest(config, profile_digest=_profile_digest(config), implementer=choice.name))
+            timeout_record = _live_timeout_record(sizing, stream_v2, choice.name)
+            _record_live_timeouts(store, task.id, timeout_record)
+            store.record_runtime_manifest(task.id, _live_runtime_manifest(config, profile_digest=_profile_digest(config), implementer=choice.name, timeout_record=timeout_record))
             orchestrator = Orchestrator(
                 store, cursor if choice.name == "cursor" else deepseek, codex, antigravity,
                 profile_digest=_profile_digest(config),
@@ -469,6 +516,8 @@ def resume(
                 report_path.write_text(render_persisted_report(store, task_id), encoding="utf-8")
                 typer.echo(f"Task: {task_id}\nState: {state.value}\nReport: {report_path}")
                 return
+            task = store.load(task_id)
+            sizing = classify_task_size(task.spec, Path(task.spec.scope[0])) if any(stream_v2.values()) else None
             expected = {
                 "mode": "live", "implementer": persisted["implementer"],
                 "verifier": "codex", "reviewer": "antigravity",
@@ -483,6 +532,7 @@ def resume(
                     command=_profile_command(config, "cursor"),
                     estimated_usd=_priced(config, "cursor"),
                     stream_v2=stream_v2["cursor"],
+                    stream_policy=_live_stream_policy(sizing, stream_v2["cursor"], Provider.CURSOR, Stage.IMPLEMENT)[0],
                 )
             elif persisted["implementer"] == "deepseek":
                 fallback_name, fallback_enabled = _fallback_profile(config)
@@ -494,7 +544,8 @@ def resume(
                 implementer = DeepSeekAdapter(
                     enabled=True,
                     billing_confirmed=billing_confirmed, live_confirmed=live_confirmed,
-                    estimated_usd=fallback_estimate, stream_v2=stream_v2["deepseek"], **_deepseek_options(config),
+                    estimated_usd=fallback_estimate, stream_v2=stream_v2["deepseek"],
+                    stream_policy=_live_stream_policy(sizing, stream_v2["deepseek"], Provider.DEEPSEEK, Stage.IMPLEMENT)[0], **_deepseek_options(config),
                 )
                 probe_cost = None
                 if recovery_checkpoint[0] == "implement":
@@ -503,8 +554,9 @@ def resume(
                         raise ValueError("invalid fallback probe estimate")
             else:
                 raise ValueError("persisted implementer is unavailable")
+            timeout_record = _live_timeout_record(sizing, stream_v2, persisted["implementer"])
             recorded_manifest = store.runtime_manifest(task_id)
-            if recorded_manifest is not None and compare_manifests(recorded_manifest, _live_runtime_manifest(config, profile_digest=digest, implementer=persisted["implementer"])):
+            if recorded_manifest is not None and compare_manifests(recorded_manifest, _live_runtime_manifest(config, profile_digest=digest, implementer=persisted["implementer"], timeout_record=timeout_record)):
                 raise ValueError("runtime manifest incompatible")
             orchestrator = Orchestrator(
                 store,
@@ -513,11 +565,13 @@ def resume(
                     command=_profile_command(config, "codex"),
                     estimated_usd=_priced(config, "codex"),
                     stream_v2=stream_v2["codex"],
+                    stream_policy=_live_stream_policy(sizing, stream_v2["codex"], Provider.CODEX, Stage.VERIFY)[0],
                 ),
                 AntigravityAdapter(
                     command=_profile_command(config, "antigravity"),
                     estimated_usd=_priced(config, "antigravity"),
                     stream_v2=stream_v2["antigravity"],
+                    stream_policy=_live_stream_policy(sizing, stream_v2["antigravity"], Provider.ANTIGRAVITY, Stage.REVIEW)[0],
                 ),
                 profile_digest=digest,
                 expected_recovery_checkpoint=recovery_checkpoint,

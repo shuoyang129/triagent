@@ -131,6 +131,22 @@ def test_resume_requires_explicit_profile_and_rejects_live_to_fake_downgrade(
     assert store.runtime(task.id).repair_attempts == 0
 
 
+def test_live_stream_timeout_record_binds_selected_provider_stages(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("x", encoding="utf-8")
+    task = TaskSpec(goal="goal", scope=[str(tmp_path)], acceptance=["x"], risk=RiskLevel.ROBOT_SAFETY)
+    sizing = cli_module.classify_task_size(task, tmp_path)
+    streams = {"cursor": True, "deepseek": True, "codex": True, "antigravity": True}
+
+    record = cli_module._live_timeout_record(sizing, streams, "deepseek")
+    implement_policy, _ = cli_module._live_stream_policy(sizing, True, cli_module.Provider.DEEPSEEK, cli_module.Stage.IMPLEMENT)
+
+    assert record is not None
+    assert record["task_sizing"]["size"] == "medium"
+    assert set(record["selections"]) == {"implement", "repair", "verify", "review"}
+    assert record["selections"]["implement"]["provider"] == "deepseek"
+    assert implement_policy is not None and implement_policy.hard_timeout == 1800
+
+
 def test_agent_enabled_defaults_cursor_on_and_accepts_explicit_disable() -> None:
     assert cli_module._agent_enabled({}, "cursor", default=True) is True
     assert cli_module._agent_enabled(
