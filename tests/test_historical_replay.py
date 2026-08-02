@@ -17,8 +17,8 @@ def test_known_failure_fixture_is_complete_and_declarative() -> None:
     assert len(cases) == 12
     assert len(fixture_digest) == 64
     assert {case.identifier for case in cases} >= {
-        "codex-home-contamination", "agy-transient-retry", "opencode-fragmented-json",
-        "controller-crash-durable-result", "runtime-manifest-resume-drift",
+        "codex-home-environment-contamination", "antigravity-one-transient-unavailable-then-success", "fragmented-opencode-json-output",
+        "controller-crash-after-durable-result", "runtime-manifest-drift-on-resume",
     }
 
 
