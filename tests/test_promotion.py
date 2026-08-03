@@ -149,7 +149,7 @@ def test_safety_gate_capture_requires_fixed_passing_contract_tests(tmp_path: Pat
     relative, _ = capture_junit_unit_test_gate_descriptor(tmp_path, gate="no-secret-leak", junit_path="artifacts/secret.xml", source_commit="b" * 40, captured_at="2026-08-04T00:00:00Z")
     assert json.loads((tmp_path / relative).read_text(encoding="utf-8"))["gate"] == "no-secret-leak"
     with pytest.raises(PromotionEvidenceError, match="unsupported"):
-        capture_junit_unit_test_gate_descriptor(tmp_path, gate="legacy-fallback", junit_path="artifacts/secret.xml", source_commit="b" * 40)
+        capture_junit_unit_test_gate_descriptor(tmp_path, gate="original-tasks-readable-and-resumable", junit_path="artifacts/secret.xml", source_commit="b" * 40)
 
 
 def test_descriptor_writer_requires_sanitized_output_and_binds_raw_log(tmp_path: Path) -> None:

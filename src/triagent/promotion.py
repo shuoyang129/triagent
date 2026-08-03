@@ -85,6 +85,14 @@ _UNIT_TEST_GATE_SELECTORS = {
         "tests/test_ninth_wave_contract.py::test_candidate_plumbing_ignores_hooks_and_filters",
         "tests/test_completion_protocol.py::test_private_control_record_is_bound_atomic_and_replayable",
     ),
+    "legacy-fallback": (
+        "tests/test_legacy_contract_golden.py::test_legacy_review_retry_and_provenance_golden_snapshot",
+        "tests/test_legacy_contract_golden.py::test_legacy_provider_argv_env_and_secret_boundary_golden",
+        "tests/test_legacy_contract_golden.py::test_legacy_resume_provenance_lease_and_approval_golden",
+        "tests/test_v2_runtime.py::test_v2_refuses_original_root_before_store_initialization",
+        "tests/test_v2_runtime.py::test_v2_rejects_inherited_legacy_root",
+        "tests/test_v2_runtime.py::test_stream_v2_defaults_to_legacy_and_requires_explicit_v2_profile",
+    ),
 }
 
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,99}\Z")
