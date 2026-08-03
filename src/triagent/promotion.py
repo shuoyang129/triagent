@@ -363,7 +363,7 @@ def capture_junit_unit_test_gate_descriptor(
         raise PromotionEvidenceError("junit source_commit must be a full lowercase git SHA")
     return write_artifact_descriptor(
         base, stage="unit-tests", gate=gate, raw_log_path=raw_relative,
-        command="pytest -q " + " ".join(selectors) + f" --junitxml={raw_relative}",
+        command="promotion-capture-junit-unit-tests:" + gate,
         captured_at=captured_at, source_commit=source_commit, sanitized=True,
     )
 
