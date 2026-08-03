@@ -7,7 +7,7 @@ cutover or replace any missing gate artifact.
 
 | Stage | Retained evidence | Status |
 | --- | --- | --- |
-| unit-tests | `docs/evidence/promotion/artifacts/unit-tests-20260804.log` SHA-256 `7cf394352dde509884db168cd94f81500f3ec62b9c800b13072a4856830b8079` | Fresh full v2 regression retained; descriptor capture still required |
+| unit-tests | `docs/evidence/promotion/artifacts/unit-tests-current.junit.xml` SHA-256 `7ccee4e772efde7cac9830fa711e0cb8b5627006ea09697cad80dce028406657` | Current machine-readable full v2 regression: 443 passed, 9 skipped; descriptor capture still required |
 | adapter-contracts | `docs/evidence/promotion/artifacts/adapter-contracts-20260804.log` SHA-256 `b2e47f893ea31111460c0112ceeb9669e4f4e2ac9e4af751a4184b390a0e53c4` | Fresh contract regression retained; per-gate descriptors still required |
 | fake-three-stage-workflow | task `c0849048-a9ae-4a25-90fd-b0f22b886540` report/event hashes recorded in `v2-staged-gates-20260802.md` | Retained |
 | historical-replay | `docs/evidence/runtime/v2-historical-replay.json` | 12 replay cases retained |
