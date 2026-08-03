@@ -1,8 +1,9 @@
 # V2 humanoid read-only promotion hold — 2026-08-02
 
-This is a hold record, not a passing promotion-evidence record.  The promotion
-evaluator deliberately accepts only passing records; producing one for this
-stage would incorrectly skip a failed rollout level.
+This is fail-closed controller evidence.  Its structured promotion record must
+state `read_only_admission.outcome=fail-closed`; that proves the controller
+denied target admission and does not grant mutation, deployment, or hardware
+authority for this target.
 
 ## Task boundary
 

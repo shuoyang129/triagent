@@ -32,6 +32,8 @@ def _evidence(stage: str = "unit-tests", rollout: str = "A", *, accepted: bool =
         "replays": [{"id": item, "passed": True, "artifact_sha256": _hash(item)} for item in REPLAY_CASES] if index >= 3 else [],
         "prior_stage_digests": [{"stage": item, "digest": _hash(item)} for item in STAGES[:index]],
     }
+    if stage == "humanoid-offline-read-only":
+        record["read_only_admission"] = {"outcome": "fail-closed", "note": "controller denied target admission"}
     if accepted:
         record["operator_acceptance"] = {"action": "cutover", "outcome": "accepted", "operator": "operator", "accepted_at": "2026-08-01T00:01:00Z"}
     record["digest"] = evidence_digest(record)

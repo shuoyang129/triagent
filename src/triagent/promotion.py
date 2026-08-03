@@ -151,7 +151,7 @@ def evaluate(evidence: Mapping[str, Any]) -> PromotionEvaluation:
     _required_keys(
         record,
         required={"schema_version", "stage", "rollout_stage", "generated_at", "gates", "replays", "prior_stage_digests", "digest"},
-        allowed={"schema_version", "stage", "rollout_stage", "generated_at", "gates", "replays", "prior_stage_digests", "operator_acceptance", "digest"},
+        allowed={"schema_version", "stage", "rollout_stage", "generated_at", "gates", "replays", "prior_stage_digests", "read_only_admission", "operator_acceptance", "digest"},
         label="promotion evidence",
     )
     if record["schema_version"] != 1 or isinstance(record["schema_version"], bool):
@@ -187,6 +187,15 @@ def evaluate(evidence: Mapping[str, Any]) -> PromotionEvaluation:
     calculated = evidence_digest(record)
     if supplied_digest != calculated:
         raise PromotionEvidenceError("promotion evidence digest does not match content")
+    admission = record.get("read_only_admission")
+    if stage == "humanoid-offline-read-only":
+        admission_record = _object(admission, "read_only_admission")
+        _required_keys(admission_record, required={"outcome"}, allowed={"outcome", "note"}, label="read_only_admission")
+        if admission_record["outcome"] != "fail-closed":
+            raise PromotionEvidenceError("read_only_admission must record fail-closed")
+    elif admission is not None:
+        raise PromotionEvidenceError("read_only_admission is only valid for humanoid-offline-read-only")
+
     accepted = False
     acceptance = record.get("operator_acceptance")
     if acceptance is not None:
