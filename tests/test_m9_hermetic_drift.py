@@ -33,7 +33,7 @@ def test_suite_environment_is_hermetic_from_operator_configuration(tmp_path: Pat
 def test_v2_profile_and_own_agy_wrapper_have_a_positive_content_binding() -> None:
     binding = profile_binding(V2_PROFILE)
 
-    assert binding["deepseek"] == {"model": "deepseek/deepseek-v4-flash", "enabled": False}
+    assert binding["deepseek"] == {"model": "deepseek/deepseek-v4-flash", "enabled": True}
     assert binding["antigravity_wrapper"]["path"] == str(AGY)
     assert len(str(binding["profile"]["sha256"])) == 64
     assert len(str(binding["antigravity_wrapper"]["sha256"])) == 64

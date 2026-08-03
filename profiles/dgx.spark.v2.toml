@@ -25,7 +25,7 @@ estimated_usd = 1.0
 stream_v2 = true
 
 [agents.cursor]
-enabled = true
+enabled = false
 command = ["/home/ys/works/robots/triagent-v2/scripts/cursor-agent-adapter.zsh", "--auto-review", "--sandbox", "enabled", "--model", "auto"]
 estimated_usd = 1.0
 stream_v2 = true
@@ -36,7 +36,7 @@ estimated_usd = 1.0
 stream_v2 = true
 
 [agents.deepseek]
-enabled = false
+enabled = true
 model = "deepseek/deepseek-v4-flash"
 command = ["/home/ys/.opencode/bin/opencode"]
 estimated_usd = 1.0
