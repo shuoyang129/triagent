@@ -36,6 +36,7 @@ from triagent.adapters.process import StreamPolicy
 from triagent.timeout_policy import Provider, Stage, TaskSize, default_v2_matrix
 from triagent.task_sizing import TaskSizingEvidence, classify_task_size
 from triagent.store import TaskStore
+from triagent.verifier_manifest import VerificationManifest
 from triagent import __version__
 
 
@@ -324,10 +325,12 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
         forbidden: ForbiddenOptions = None, visual_check: VisualCheckOption = "none",
         profile: Annotated[str, typer.Option()] = "fake", data_root: DataRoot = None,
         live_confirmed: Annotated[bool, typer.Option("--live-confirmed")] = False,
-        billing_confirmed: Annotated[bool, typer.Option("--billing-confirmed")] = False) -> None:
+        billing_confirmed: Annotated[bool, typer.Option("--billing-confirmed")] = False,
+        verification_manifest: Annotated[Path | None, typer.Option("--verification-manifest")] = None) -> None:
     if profile != "fake" and not (live_confirmed and billing_confirmed):
         raise typer.BadParameter("real profiles require --live-confirmed and --billing-confirmed")
     config=None; budget=Budget(); fallback_name="deepseek"; fallback_enabled=False; fallback_estimate=None; probe_cost=None
+    manifest: VerificationManifest | None = None
     setup_diagnostic: str | None = None
     try:
         if profile != "fake":
@@ -341,6 +344,8 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
             if fallback_enabled:
                 fallback_estimate=_priced(config,fallback_name);probe_cost=_priced(config,fallback_name,"probe_estimated_usd")
                 if fallback_estimate is None or fallback_estimate<=0 or probe_cost is None or probe_cost<=0:raise ValueError("invalid fallback cost estimates")
+        if verification_manifest is not None:
+            manifest = VerificationManifest.load(verification_manifest)
         GitWorkspace.validate(repo)
     except (OSError,tomllib.TOMLDecodeError,ValueError,TypeError,RuntimeError):
         raise typer.BadParameter("task input validation failed") from None
@@ -348,6 +353,10 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
         store = TaskStore(_root(data_root, allow_initialize=True)); task = store.create_task(
             _spec(repo, goal, risk, acceptance, forbidden, visual_check, budget)
         )
+        if verification_manifest is not None:
+            snapshot = store.runs_root / task.id / ("verification-manifest" + verification_manifest.suffix)
+            snapshot.write_bytes(verification_manifest.read_bytes())
+            manifest = VerificationManifest.load(snapshot, trusted_root=snapshot.parent)
         # Only Fake is recorded here.  This construction is pure data and cannot
         # discover a provider; live runtime binding remains a later gated step.
         if profile == "fake":
@@ -390,6 +399,7 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
                 store, cursor if choice.name == "cursor" else deepseek, codex, antigravity,
                 profile_digest=_profile_digest(config),
                 implementer_probe_estimated_usd=probe_cost,
+                verification_manifest=manifest,
             )
         with _recover_interruption():
             state = orchestrator.run_until_blocked(task.id)

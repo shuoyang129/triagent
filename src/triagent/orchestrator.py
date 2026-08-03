@@ -18,6 +18,8 @@ from triagent.completion import (
     CompletionAlreadyConsumed, CompletionBinding, CompletionControl, CompletionError,
     DurableResult, _digest, find_recoverable_result,
 )
+from triagent.verifier_manifest import ManifestExecutor, VerificationManifest, VerificationManifestError
+
 
 _TRUSTED={CursorAdapter:("cursor",frozenset({AgentRole.IMPLEMENTER})),CodexAdapter:("codex",frozenset({AgentRole.VERIFIER})),AntigravityAdapter:("antigravity",frozenset({AgentRole.REVIEWER})),DeepSeekAdapter:("deepseek",frozenset({AgentRole.IMPLEMENTER}))}
 _SAFE_DIAGNOSTICS=frozenset({
@@ -88,6 +90,7 @@ class Orchestrator:
         profile_digest: str | None = None,
         expected_recovery_checkpoint: tuple[str, int] | None = None,
         implementer_probe_estimated_usd: float | None = None,
+        verification_manifest: VerificationManifest | None = None,
     ) -> None:
         self.store = store
         self.implementer = implementer
@@ -96,6 +99,7 @@ class Orchestrator:
         self.profile_digest = profile_digest
         self.expected_recovery_checkpoint = expected_recovery_checkpoint
         self.implementer_probe_estimated_usd = implementer_probe_estimated_usd
+        self.verification_manifest = verification_manifest
         self._lease_owner: str | None = None
 
     def consume_fake_durable_completion(
@@ -535,6 +539,19 @@ class Orchestrator:
             self._write_handoff(task_id)
             return self.store.transition(task_id, state, TaskState.VERIFY, "implementation-complete").state
         if state is TaskState.VERIFY:
+            if self.verification_manifest is not None:
+                try:
+                    self.store.restore_candidate_worktree(task_id)
+                    manifest_result = ManifestExecutor(self.store.runs_root / task_id / "worktree").execute(self.verification_manifest)
+                except (ValueError, VerificationManifestError):
+                    manifest_result = None
+                if manifest_result is None or not manifest_result.passed:
+                    diagnostic = "verification-manifest-invalid" if manifest_result is None else "verification-manifest-failed"
+                    self.store.record_outcome(task_id, StageOutcome(stage="verify", status="failed", summary="requires-repair", diagnostic=diagnostic))
+                    return self.store.transition_recoverable(task_id, state, "verify", diagnostic).state
+                self.store.record_outcome(task_id, StageOutcome(stage="verify", status="passed", summary="verified", evidence=[f"manifest:{manifest_result.manifest_digest}", *manifest_result.evidence], artifacts=list(manifest_result.artifacts)))
+                self._write_handoff(task_id, tests=self.store.outcomes(task_id)["verify"].evidence)
+                return self.store.transition(task_id, state, TaskState.REVIEW, "manifest-verification-complete").state
             result = self._call(
                 task_id,
                 state,
