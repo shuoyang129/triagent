@@ -13,6 +13,7 @@ from triagent.promotion import (
     STAGES,
     evaluate,
     evaluate_chain,
+    verify_artifacts,
     evidence_digest,
 )
 
@@ -28,8 +29,8 @@ def _evidence(stage: str = "unit-tests", rollout: str = "A", *, accepted: bool =
         "stage": stage,
         "rollout_stage": rollout,
         "generated_at": "2026-08-01T00:00:00Z",
-        "gates": [{"id": item, "passed": True, "artifact_sha256": _hash(item)} for item in SAFETY_GATES],
-        "replays": [{"id": item, "passed": True, "artifact_sha256": _hash(item)} for item in REPLAY_CASES] if index >= 3 else [],
+        "gates": [{"id": item, "passed": True, "artifact_sha256": _hash(item), "artifact_path": f"artifacts/{stage}/{item}.json"} for item in SAFETY_GATES],
+        "replays": [{"id": item, "passed": True, "artifact_sha256": _hash(item), "artifact_path": f"artifacts/{stage}/{item}.json"} for item in REPLAY_CASES] if index >= 3 else [],
         "prior_stage_digests": [{"stage": item, "digest": _hash(item)} for item in STAGES[:index]],
     }
     if stage == "humanoid-offline-read-only":
@@ -66,7 +67,7 @@ def test_final_stage_requires_a_verified_chain_for_cutover_eligibility() -> None
     assert single.cutover_eligible is False
 
     chain = evaluate_chain(_chain())
-    assert chain.cutover_eligible is True
+    assert chain.cutover_eligible is False
 
 
 def test_chain_rejects_forged_prior_digest_linkage() -> None:
@@ -105,6 +106,29 @@ def test_historical_replay_requires_every_declared_replay_case() -> None:
 
     with pytest.raises(PromotionEvidenceError, match="replays is incomplete"):
         evaluate(record)
+
+
+def test_artifact_verifier_binds_descriptor_and_raw_log_content(tmp_path: Path) -> None:
+    record = _evidence()
+    items = [*record["gates"], *record["replays"]]
+    for item in items:
+        assert isinstance(item, dict)
+        identifier = item["id"]
+        raw_relative = f"raw/{identifier}.log"
+        raw_path = tmp_path / raw_relative
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path.write_bytes(b"passed")
+        descriptor = {"schema_version": 1, "stage": record["stage"], "gate": identifier, "passed": True, "exit_code": 0, "raw_log_path": raw_relative, "raw_log_sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(), "sanitized": True}
+        relative = item["artifact_path"]
+        descriptor_path = tmp_path / relative
+        descriptor_path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor_path.write_text(json.dumps(descriptor, sort_keys=True), encoding="utf-8")
+        item["artifact_sha256"] = hashlib.sha256(descriptor_path.read_bytes()).hexdigest()
+    record["digest"] = evidence_digest(record)
+    assert verify_artifacts(record, tmp_path).passed is True
+    (tmp_path / "raw/full-tests.log").write_bytes(b"tampered")
+    with pytest.raises(PromotionEvidenceError, match="raw log digest"):
+        verify_artifacts(record, tmp_path)
 
 
 def test_schema_is_present_and_describes_offline_acceptance_boundary() -> None:

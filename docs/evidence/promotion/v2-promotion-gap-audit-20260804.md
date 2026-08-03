@@ -7,8 +7,8 @@ cutover or replace any missing gate artifact.
 
 | Stage | Retained evidence | Status |
 | --- | --- | --- |
-| unit-tests | `/tmp/triagent-v2-promotion-hold.log` SHA-256 `c9217f28f7c6f8dc79d59f3b630843dfbda5bdeab05acb7f2b33df2fbf05e6e5` | Full v2 regression retained |
-| adapter-contracts | `docs/evidence/runtime/v2-historical-replay.json` SHA-256 `fefceeff861b137f37288e315f18e824805a709a5dc4be9262da5d96dec0d563` | Requires stage-specific gate extraction |
+| unit-tests | `docs/evidence/promotion/artifacts/unit-tests-20260804.log` SHA-256 `7cf394352dde509884db168cd94f81500f3ec62b9c800b13072a4856830b8079` | Fresh full v2 regression retained; descriptor capture still required |
+| adapter-contracts | `docs/evidence/promotion/artifacts/adapter-contracts-20260804.log` SHA-256 `b2e47f893ea31111460c0112ceeb9669e4f4e2ac9e4af751a4184b390a0e53c4` | Fresh contract regression retained; per-gate descriptors still required |
 | fake-three-stage-workflow | task `c0849048-a9ae-4a25-90fd-b0f22b886540` report/event hashes recorded in `v2-staged-gates-20260802.md` | Retained |
 | historical-replay | `docs/evidence/runtime/v2-historical-replay.json` | 12 replay cases retained |
 | isolated-no-provider-synthetic | task `ecc3cdb0-6ec2-4ed9-9150-c0fda461c8ca` | Retained |

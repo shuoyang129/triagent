@@ -8,8 +8,11 @@ cutover, the public `triagent`, its environment, profiles, wrappers, and
 
 Retain immutable test/replay output outside an implementer worktree, hash each
 artifact, and record it in the schema at
-`docs/evidence/promotion/v2-promotion-evidence.schema.json`.  Evaluate a record offline with `triagent.promotion.evaluate`; evaluate a complete
-chain with `triagent.promotion.evaluate_chain`; this parses local data only.
+`docs/evidence/promotion/v2-promotion-evidence.schema.json`.  Evaluate a record offline with `triagent.promotion.evaluate`. A record binds every
+gate to a retained descriptor path and its SHA-256; the descriptor binds a
+sanitized raw-log path and SHA-256. Evaluate a complete chain with
+`triagent.promotion.evaluate_chain(records, artifact_root=...)`; omitting
+`artifact_root` is intentionally never cutover eligible. This parses local data only.
 It never constructs a provider adapter, launches a provider, or changes an
 entry point.
 

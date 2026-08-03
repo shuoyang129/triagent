@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
@@ -106,13 +107,21 @@ def _digest(value: object, label: str) -> str:
     return text
 
 
+def _artifact_path(value: object, label: str) -> str:
+    """Validate a repository-relative evidence descriptor path."""
+    text = _text(value, label, limit=256)
+    if text.startswith("/") or "\\" in text or any(part in {"", ".", ".."} for part in text.split("/")):
+        raise PromotionEvidenceError(f"{label} must be a safe relative path")
+    return text
+
+
 def _evidence_items(value: object, allowed_ids: tuple[str, ...], label: str, *, required: bool) -> set[str]:
     if not isinstance(value, list):
         raise PromotionEvidenceError(f"{label} must be an array")
     found: set[str] = set()
     for item in value:
         record = _object(item, label)
-        _required_keys(record, required={"id", "passed", "artifact_sha256"}, allowed={"id", "passed", "artifact_sha256", "note"}, label=label)
+        _required_keys(record, required={"id", "passed", "artifact_sha256", "artifact_path"}, allowed={"id", "passed", "artifact_sha256", "artifact_path", "note"}, label=label)
         identifier = _id(record["id"], f"{label}.id")
         if identifier not in allowed_ids:
             raise PromotionEvidenceError(f"{label} has unsupported id: {identifier}")
@@ -121,6 +130,7 @@ def _evidence_items(value: object, allowed_ids: tuple[str, ...], label: str, *, 
         if record["passed"] is not True:
             raise PromotionEvidenceError(f"{label} is not passing: {identifier}")
         _digest(record["artifact_sha256"], f"{label}.artifact_sha256")
+        _artifact_path(record["artifact_path"], f"{label}.artifact_path")
         if "note" in record:
             _text(record["note"], f"{label}.note", limit=512)
         found.add(identifier)
@@ -213,12 +223,47 @@ def evaluate(evidence: Mapping[str, Any]) -> PromotionEvaluation:
     return PromotionEvaluation(True, stage, rollout_stage, supplied_digest, (), False)
 
 
-def evaluate_chain(records: Sequence[Mapping[str, Any]]) -> PromotionEvaluation:
+def verify_artifacts(evidence: Mapping[str, Any], root: Path | str) -> PromotionEvaluation:
+    """Verify retained descriptor and raw-log content for every claimed check."""
+    result = evaluate(evidence)
+    base = Path(root).resolve(strict=True)
+    items = [*evidence["gates"], *evidence["replays"]]
+    for item in items:
+        if not isinstance(item, dict):
+            raise PromotionEvidenceError("evidence item must be an object")
+        identifier = _id(item.get("id"), "evidence item id")
+        relative = _artifact_path(item.get("artifact_path"), "evidence item artifact_path")
+        descriptor_path = (base / relative).resolve()
+        if not descriptor_path.is_relative_to(base) or descriptor_path.is_symlink() or not descriptor_path.is_file():
+            raise PromotionEvidenceError("evidence descriptor path is unsafe or missing")
+        if hashlib.sha256(descriptor_path.read_bytes()).hexdigest() != _digest(item.get("artifact_sha256"), "evidence item artifact_sha256"):
+            raise PromotionEvidenceError("evidence descriptor digest does not match content")
+        try:
+            descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise PromotionEvidenceError("evidence descriptor is unreadable") from error
+        descriptor = _object(descriptor, "evidence descriptor")
+        _required_keys(descriptor, required={"schema_version", "stage", "gate", "passed", "exit_code", "raw_log_path", "raw_log_sha256", "sanitized"}, allowed={"schema_version", "stage", "gate", "passed", "exit_code", "raw_log_path", "raw_log_sha256", "sanitized", "captured_at", "command", "task_id", "profile_digest", "source_commit", "note"}, label="evidence descriptor")
+        if descriptor["schema_version"] != 1 or descriptor["stage"] != evidence["stage"] or descriptor["gate"] != identifier or descriptor["passed"] is not True or descriptor["exit_code"] != 0 or descriptor["sanitized"] is not True:
+            raise PromotionEvidenceError("evidence descriptor does not attest the claimed passing check")
+        raw_relative = _artifact_path(descriptor["raw_log_path"], "evidence descriptor raw_log_path")
+        raw_path = (base / raw_relative).resolve()
+        if not raw_path.is_relative_to(base) or raw_path.is_symlink() or not raw_path.is_file():
+            raise PromotionEvidenceError("evidence raw log path is unsafe or missing")
+        if hashlib.sha256(raw_path.read_bytes()).hexdigest() != _digest(descriptor["raw_log_sha256"], "evidence descriptor raw_log_sha256"):
+            raise PromotionEvidenceError("evidence raw log digest does not match content")
+    return result
+
+
+def evaluate_chain(records: Sequence[Mapping[str, Any]], *, artifact_root: Path | str | None = None) -> PromotionEvaluation:
     """Validate an ordered, content-linked promotion record chain."""
     if not records:
         raise PromotionEvidenceError("promotion evidence chain is empty")
     if len(records) > len(STAGES):
         raise PromotionEvidenceError("promotion evidence chain is too long")
+    if artifact_root is not None:
+        for record in records:
+            verify_artifacts(record, artifact_root)
     prior: list[PromotionEvaluation] = []
     for index, record in enumerate(records):
         result = evaluate(record)
@@ -238,5 +283,6 @@ def evaluate_chain(records: Sequence[Mapping[str, Any]]) -> PromotionEvaluation:
         and final.rollout_stage == "D"
         and len(prior) == len(STAGES)
         and accepted
+        and artifact_root is not None
     )
     return PromotionEvaluation(True, final.stage, final.rollout_stage, final.evidence_digest, (), eligible)
