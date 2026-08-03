@@ -116,6 +116,19 @@ def _spec(
         budget=budget or Budget(),
     )
 
+def _task_verification_manifest(store: TaskStore, task_id: str) -> VerificationManifest | None:
+    run_dir = store.runs_root / task_id
+    matches = [path for path in (run_dir / "verification-manifest.toml", run_dir / "verification-manifest.json") if path.exists()]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ValueError("verification manifest snapshot is ambiguous")
+    expected = run_dir / "verification-manifest.sha256"
+    if not expected.is_file() or expected.read_text(encoding="ascii").strip() != VerificationManifest.load(matches[0], trusted_root=run_dir).digest:
+        raise ValueError("verification manifest snapshot digest mismatch")
+    return VerificationManifest.load(matches[0], trusted_root=run_dir)
+
+
 def _priced(config: dict, name: str, field: str = "estimated_usd") -> float | None:
     value=config.get("agents",{}).get(name,{}).get(field)
     return float(value) if not isinstance(value,bool) and isinstance(value,(int,float)) and math.isfinite(value) and value >= 0 else None
@@ -357,6 +370,7 @@ def run(repo: Path, goal: str, risk: RiskOption, acceptance: AcceptanceOptions,
             snapshot = store.runs_root / task.id / ("verification-manifest" + verification_manifest.suffix)
             snapshot.write_bytes(verification_manifest.read_bytes())
             manifest = VerificationManifest.load(snapshot, trusted_root=snapshot.parent)
+            (store.runs_root / task.id / "verification-manifest.sha256").write_text(manifest.digest + "\n", encoding="ascii")
         # Only Fake is recorded here.  This construction is pure data and cannot
         # discover a provider; live runtime binding remains a later gated step.
         if profile == "fake":
@@ -569,6 +583,7 @@ def resume(
             recorded_manifest = store.runtime_manifest(task_id)
             if recorded_manifest is not None and compare_manifests(recorded_manifest, _live_runtime_manifest(config, profile_digest=digest, implementer=persisted["implementer"], timeout_record=timeout_record)):
                 raise ValueError("runtime manifest incompatible")
+            verification_manifest = _task_verification_manifest(store, task_id)
             orchestrator = Orchestrator(
                 store,
                 implementer,
@@ -587,6 +602,7 @@ def resume(
                 profile_digest=digest,
                 expected_recovery_checkpoint=recovery_checkpoint,
                 implementer_probe_estimated_usd=probe_cost,
+                verification_manifest=verification_manifest,
             )
             store.record_attestation(task_id, "live-confirmed", True)
             store.record_attestation(task_id, "billing-confirmed", True)
