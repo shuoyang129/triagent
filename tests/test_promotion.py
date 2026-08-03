@@ -16,6 +16,7 @@ from triagent.promotion import (
     verify_artifacts,
     write_artifact_descriptor,
     capture_junit_full_tests_descriptor,
+    capture_junit_unit_test_gate_descriptor,
     evidence_digest,
 )
 
@@ -132,6 +133,23 @@ def test_junit_capture_requires_passing_sanitized_xml_and_source_commit(tmp_path
     raw.write_text("""<testsuite tests="1" errors="0" failures="1" />""", encoding="utf-8")
     with pytest.raises(PromotionEvidenceError, match="did not pass"):
         capture_junit_full_tests_descriptor(tmp_path, junit_path="artifacts/unit.xml", source_commit="a" * 40)
+
+
+def test_safety_gate_capture_requires_fixed_passing_contract_tests(tmp_path: Path) -> None:
+    raw = tmp_path / "artifacts" / "secret.xml"
+    raw.parent.mkdir()
+    cases = "".join(f"""<testcase name="{name}" />""" for name in (
+        "test_streaming_runner_redacts_split_secrets_and_bounds_evidence",
+        "test_result_recursively_redacts_secret_values_and_keys",
+        "test_unknown_secret_in_secret_key_and_raw_vendor_error_never_escape",
+        "test_default_adapter_allowlists_and_redacts_known_environment_secret",
+        "test_distribution_materials_do_not_embed_secrets",
+    ))
+    raw.write_text(f"""<testsuites><testsuite tests="5" errors="0" failures="0">{cases}</testsuite></testsuites>""", encoding="utf-8")
+    relative, _ = capture_junit_unit_test_gate_descriptor(tmp_path, gate="no-secret-leak", junit_path="artifacts/secret.xml", source_commit="b" * 40, captured_at="2026-08-04T00:00:00Z")
+    assert json.loads((tmp_path / relative).read_text(encoding="utf-8"))["gate"] == "no-secret-leak"
+    with pytest.raises(PromotionEvidenceError, match="unsupported"):
+        capture_junit_unit_test_gate_descriptor(tmp_path, gate="legacy-fallback", junit_path="artifacts/secret.xml", source_commit="b" * 40)
 
 
 def test_descriptor_writer_requires_sanitized_output_and_binds_raw_log(tmp_path: Path) -> None:

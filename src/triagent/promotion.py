@@ -63,6 +63,30 @@ REPLAY_CASES = (
     "runtime-manifest-drift-on-resume",
 )
 
+_UNIT_TEST_GATE_SELECTORS = {
+    "no-secret-leak": (
+        "tests/test_streaming_process.py::test_streaming_runner_redacts_split_secrets_and_bounds_evidence",
+        "tests/test_cli_capabilities.py::test_result_recursively_redacts_secret_values_and_keys",
+        "tests/test_cli_capabilities.py::test_unknown_secret_in_secret_key_and_raw_vendor_error_never_escape",
+        "tests/test_cli_capabilities.py::test_default_adapter_allowlists_and_redacts_known_environment_secret",
+        "tests/test_packaging.py::test_distribution_materials_do_not_embed_secrets",
+    ),
+    "no-residual-provider-process": (
+        "tests/test_streaming_process.py::test_streaming_runner_terminates_descendant_processes",
+        "tests/test_deepseek_stream_v2.py::test_stream_v2_cleanup_on_transport_failure_and_readiness_never_uses_stream",
+    ),
+    "no-duplicate-provider-call-after-recovery": (
+        "tests/test_completion_store_integration.py::test_crash_after_store_commit_replays_without_provider_or_duplicate_ledger",
+        "tests/test_orchestrator.py::test_live_review_durable_result_recovers_after_crash_without_second_provider",
+        "tests/test_orchestrator.py::test_live_implementation_durable_result_recovers_after_crash_without_second_provider",
+    ),
+    "no-candidate-misattribution": (
+        "tests/test_ninth_wave_contract.py::test_candidate_exists_before_verify_and_reviewer_mutations_never_enter_it",
+        "tests/test_ninth_wave_contract.py::test_candidate_plumbing_ignores_hooks_and_filters",
+        "tests/test_completion_protocol.py::test_private_control_record_is_bound_atomic_and_replayable",
+    ),
+}
+
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,99}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _ISO_UTC = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
@@ -302,6 +326,44 @@ def capture_junit_full_tests_descriptor(
     return write_artifact_descriptor(
         base, stage="unit-tests", gate="full-tests", raw_log_path=raw_relative,
         command="pytest -q --junitxml=artifacts/unit-tests-current.junit.xml",
+        captured_at=captured_at, source_commit=source_commit, sanitized=True,
+    )
+
+
+def capture_junit_unit_test_gate_descriptor(
+    root: Path | str, *, gate: str, junit_path: str, source_commit: str, captured_at: str | None = None,
+) -> tuple[str, str]:
+    """Capture one fixed offline safety-contract gate from passing JUnit XML."""
+    selectors = _UNIT_TEST_GATE_SELECTORS.get(gate)
+    if selectors is None:
+        raise PromotionEvidenceError("unsupported JUnit unit-test gate")
+    base = Path(root).resolve(strict=True)
+    raw_relative = _artifact_path(junit_path, "junit path")
+    raw_path = (base / raw_relative).resolve()
+    if not raw_path.is_relative_to(base) or raw_path.is_symlink() or not raw_path.is_file():
+        raise PromotionEvidenceError("junit path is unsafe or missing")
+    raw = raw_path.read_bytes()
+    if len(raw) > 2_000_000 or b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
+        raise PromotionEvidenceError("junit input is unsafe")
+    try:
+        document = ET.fromstring(raw)
+    except ET.ParseError as error:
+        raise PromotionEvidenceError("junit input is malformed") from error
+    if document.tag not in {"testsuites", "testsuite"} or document.find(".//system-out") is not None or document.find(".//system-err") is not None or document.find(".//properties") is not None:
+        raise PromotionEvidenceError("junit input contains unsupported output")
+    suites = [node for node in document.iter("testsuite")]
+    values = [suite.get(attribute, "0") for suite in suites for attribute in ("tests", "errors", "failures")]
+    if not suites or not all(value.isdecimal() for value in values) or sum(int(suite.get("tests", "0")) for suite in suites) < 1 or any(int(suite.get(attribute, "0")) != 0 for suite in suites for attribute in ("errors", "failures")):
+        raise PromotionEvidenceError("junit safety gate did not pass")
+    names = [case.get("name", "") for case in document.iter("testcase")]
+    required = tuple(selector.rsplit("::", 1)[1] for selector in selectors)
+    if not all(any(name.startswith(expected) for name in names) for expected in required):
+        raise PromotionEvidenceError("junit safety gate is missing required tests")
+    if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        raise PromotionEvidenceError("junit source_commit must be a full lowercase git SHA")
+    return write_artifact_descriptor(
+        base, stage="unit-tests", gate=gate, raw_log_path=raw_relative,
+        command="pytest -q " + " ".join(selectors) + f" --junitxml={raw_relative}",
         captured_at=captured_at, source_commit=source_commit, sanitized=True,
     )
 
