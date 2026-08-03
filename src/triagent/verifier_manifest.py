@@ -53,6 +53,12 @@ def _relative(value: object, label: str) -> str:
     return path.as_posix()
 
 
+def _cwd(value: object) -> str:
+    if value == ".":
+        return "."
+    return _relative(value, "execution.cwd")
+
+
 def _inside(path: str, allowed: Sequence[str]) -> bool:
     candidate = PurePosixPath(path)
     return any(candidate == PurePosixPath(root) or PurePosixPath(root) in candidate.parents for root in allowed)
@@ -132,7 +138,7 @@ class VerificationManifest:
         argv = tuple(_string(part, "execution.argv") for part in argv_raw)
         if "/" in argv[0] or "\\" in argv[0] or argv[0].startswith("."):
             raise VerificationManifestError("execution argv[0] must be a PATH command name")
-        cwd = _relative(execution["cwd"], "execution.cwd")
+        cwd = _cwd(execution["cwd"])
         timeout = _integer(execution["timeout_seconds"], "execution.timeout_seconds", 1, 3600)
         output_max = _integer(execution["output_max_bytes"], "execution.output_max_bytes", 1024, 1024 * 1024)
         paths_raw = value["allowed_paths"]
@@ -140,7 +146,7 @@ class VerificationManifest:
             raise VerificationManifestError("allowed_paths must be a bounded array")
         allowed = tuple(_relative(item, "allowed_paths") for item in paths_raw)
         if len(set(allowed)) != len(allowed): raise VerificationManifestError("allowed_paths must be unique")
-        if not _inside(cwd, allowed): raise VerificationManifestError("execution.cwd is outside allowed_paths")
+        if cwd != "." and not _inside(cwd, allowed): raise VerificationManifestError("execution.cwd is outside allowed_paths")
         for argument in argv[1:]:
             if argument.startswith("/") or "\\" in argument:
                 raise VerificationManifestError("execution argv contains an absolute path")
