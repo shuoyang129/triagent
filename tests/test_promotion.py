@@ -97,6 +97,17 @@ def test_evaluator_rejects_missing_gate_chain_or_tampered_content(mutate, messag
         evaluate(record)
 
 
+def test_read_only_admission_allows_cleared_but_rejects_unknown_outcomes() -> None:
+    record = _evidence("humanoid-offline-read-only")
+    record["read_only_admission"] = {"outcome": "cleared"}
+    record["digest"] = evidence_digest(record)
+    assert evaluate(record).passed is True
+    record["read_only_admission"] = {"outcome": "ignored"}
+    record["digest"] = evidence_digest(record)
+    with pytest.raises(PromotionEvidenceError, match="fail-closed or cleared"):
+        evaluate(record)
+
+
 def test_historical_replay_requires_every_declared_replay_case() -> None:
     record = _evidence("historical-replay")
     replays = record["replays"]

@@ -1,9 +1,10 @@
 # V2 humanoid read-only promotion hold — 2026-08-02
 
-This is fail-closed controller evidence.  Its structured promotion record must
-state `read_only_admission.outcome=fail-closed`; that proves the controller
-denied target admission and does not grant mutation, deployment, or hardware
-authority for this target.
+This is fail-closed controller evidence. Its structured promotion record states
+`read_only_admission.outcome=fail-closed`; that proves the controller denied
+target admission and does not grant mutation, deployment, or hardware authority
+for this target. Only a separate read-only run with `outcome=cleared` can satisfy
+the admission prerequisite for a later ordinary humanoid task.
 
 ## Task boundary
 

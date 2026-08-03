@@ -42,11 +42,13 @@ earlier stage, so a later stage cannot be evaluated without an evidence chain:
 Do not skip a failed level.  A passing record is only a structured review aid;
 the referenced artifacts must still be independently reviewed.
 
-For stage 8, distinguish a controller/transport failure from a completed
-`INSPECTION_HOLD`. The latter proves the read-only v2 control correctly denied
-admission after independent BLOCKER or MAJOR findings, while preserving the
-source snapshot and creating no candidate or approval. It is valid fail-closed
-evidence for the controller, but it does not authorize stage 9 for that target.
+For stage 8, distinguish a controller/transport failure, a completed
+`INSPECTION_HOLD`, and a cleared read-only admission. A hold proves the read-only
+v2 control correctly denied admission after independent BLOCKER or MAJOR findings,
+while preserving the source snapshot and creating no candidate or approval. It is
+valid fail-closed controller evidence, but never authorizes stage 9 for that
+target. Only a separately reviewed `read_only_admission.outcome=cleared` record
+may satisfy stage 9 admission.
 
 ## Gray rollout boundaries
 

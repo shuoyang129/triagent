@@ -201,8 +201,8 @@ def evaluate(evidence: Mapping[str, Any]) -> PromotionEvaluation:
     if stage == "humanoid-offline-read-only":
         admission_record = _object(admission, "read_only_admission")
         _required_keys(admission_record, required={"outcome"}, allowed={"outcome", "note"}, label="read_only_admission")
-        if admission_record["outcome"] != "fail-closed":
-            raise PromotionEvidenceError("read_only_admission must record fail-closed")
+        if admission_record["outcome"] not in {"fail-closed", "cleared"}:
+            raise PromotionEvidenceError("read_only_admission must record fail-closed or cleared")
     elif admission is not None:
         raise PromotionEvidenceError("read_only_admission is only valid for humanoid-offline-read-only")
 
@@ -278,11 +278,14 @@ def evaluate_chain(records: Sequence[Mapping[str, Any]], *, artifact_root: Path 
         prior.append(result)
     final = prior[-1]
     accepted = isinstance(records[-1].get("operator_acceptance"), Mapping)
+    read_only_admission = records[STAGES.index("humanoid-offline-read-only")].get("read_only_admission") if len(records) > STAGES.index("humanoid-offline-read-only") else None
+    read_only_cleared = isinstance(read_only_admission, Mapping) and read_only_admission.get("outcome") == "cleared"
     eligible = (
         final.stage == STAGES[-1]
         and final.rollout_stage == "D"
         and len(prior) == len(STAGES)
         and accepted
         and artifact_root is not None
+        and read_only_cleared
     )
     return PromotionEvaluation(True, final.stage, final.rollout_stage, final.evidence_digest, (), eligible)
