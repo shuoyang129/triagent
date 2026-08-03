@@ -7,7 +7,7 @@ cutover or replace any missing gate artifact.
 
 | Stage | Retained evidence | Status |
 | --- | --- | --- |
-| unit-tests | `docs/evidence/promotion/artifacts/descriptors/unit-tests/full-tests.json` SHA-256 `26eaf67a850f109bc88558952506506953aaeccbfe92d49bc6b67e907d64c26d` (binds JUnit SHA-256 `45f60ee4b8085e0ec34e1460049c8dd8f092542d71670e230c1109f08807778a`) | Fixed commit `0467e946fd045100c402d4abd1b20aa5558ed20f`: 446 passed, 9 skipped; only the full-tests gate is captured |
+| unit-tests | `docs/evidence/promotion/artifacts/descriptors/unit-tests/full-tests.json` SHA-256 `f294c68fb3490406079f26750debe1bc1a065466a4d4b612897173b657643e75` (binds JUnit SHA-256 `c83be4770ab506322eb67dd2f31e4082ee1e7a80a1014a642e099c8db17ee87d`) | Fixed commit `b1a32cc96158dcd0c029940a789addac6136637f`: 447 passed, 9 skipped; only the full-tests gate is captured |
 | adapter-contracts | `docs/evidence/promotion/artifacts/adapter-contracts-20260804.log` SHA-256 `b2e47f893ea31111460c0112ceeb9669e4f4e2ac9e4af751a4184b390a0e53c4` | Fresh contract regression retained; per-gate descriptors still required |
 | fake-three-stage-workflow | task `c0849048-a9ae-4a25-90fd-b0f22b886540` report/event hashes recorded in `v2-staged-gates-20260802.md` | Retained |
 | historical-replay | `docs/evidence/runtime/v2-historical-replay.json` | 12 replay cases retained |
@@ -21,17 +21,17 @@ cutover or replace any missing gate artifact.
 
 The `unit-tests` stage now has independently retained, fixed-contract evidence
 for five gates.  All safety-contract JUnit captures below bind source commit
-`6827cd1fb931c4c9848fbe727b2be29f72eb78c9`; their descriptors bind the
+`b1a32cc96158dcd0c029940a789addac6136637f`; their descriptors bind the
 corresponding JUnit XML.
 
 | Gate | Descriptor SHA-256 | Result |
 | --- | --- | --- |
-| full-tests | `26eaf67a850f109bc88558952506506953aaeccbfe92d49bc6b67e907d64c26d` | fixed commit `0467e946fd045100c402d4abd1b20aa5558ed20f`, 446 passed / 9 skipped |
-| no-secret-leak | `16c1a3c719111b58b43347c8d15d513096024ef642e15b59154ee9bb1ba707f9` | 5 fixed redaction/distribution contracts passed |
-| no-residual-provider-process | `e82f01f73b456992eaf2e6d21641e0340353ea9439918ecc5e12cce60943b9a0` | 2 fixed cleanup contracts passed |
-| no-duplicate-provider-call-after-recovery | `9f12742ce8150259e878331d301f93aebe0a08e291017aec673548170da5e693` | 4 fixed durable-recovery contracts passed |
-| no-candidate-misattribution | `1f7d90ba68331acdb669addef9f2d74ce2481a3242d61a94c3ceb079ceba0daa` | 3 fixed candidate-binding contracts passed |
-| legacy-fallback | `52e0a49f5802f46ad2df1989e424f7aba7613ae6a4f8112897c81ce31740f4fc` | fixed commit `cb12d1468ae589430fada3f9c5b43e2112a85268`, 7 legacy-boundary contracts passed |
+| full-tests | `f294c68fb3490406079f26750debe1bc1a065466a4d4b612897173b657643e75` | fixed commit `b1a32cc96158dcd0c029940a789addac6136637f`, 447 passed / 9 skipped |
+| no-secret-leak | `942084a4d8dcc22057303878bd7b9708f39b17653cf6815b0e4c0ee97f146560` | 5 fixed redaction/distribution contracts passed |
+| no-residual-provider-process | `0f30fce8b3b62795aaf116c40e80fe51093fb627728ab5eda44249c8df8ca02b` | 2 fixed cleanup contracts passed |
+| no-duplicate-provider-call-after-recovery | `bff731e691b0dd4ab3312d0dca29985a5f4cfd323564d4fcb04f43f71c61891c` | 4 fixed durable-recovery contracts passed |
+| no-candidate-misattribution | `8bcba5685055985e320f37235bfb475493eb31962ab852bfda9182a924f22935` | 3 fixed candidate-binding contracts passed |
+| legacy-fallback | `aeab121341d73b143be2496806a09264015122ada546ee20a14b5818b099a8d0` | fixed commit `b1a32cc96158dcd0c029940a789addac6136637f`, 7 legacy-boundary contracts passed |
 
 `original-tasks-readable-and-resumable` remains absent. The legacy-fallback capture proves only the v2 isolation and compatibility contract; it does not prove an original historical task can resume without an isolated runtime exercise.
 Therefore this is not a complete stage record and cannot advance promotion.
