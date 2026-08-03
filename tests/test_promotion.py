@@ -14,6 +14,8 @@ from triagent.promotion import (
     evaluate,
     evaluate_chain,
     verify_artifacts,
+    write_artifact_descriptor,
+    capture_junit_full_tests_descriptor,
     evidence_digest,
 )
 
@@ -117,6 +119,31 @@ def test_historical_replay_requires_every_declared_replay_case() -> None:
 
     with pytest.raises(PromotionEvidenceError, match="replays is incomplete"):
         evaluate(record)
+
+
+def test_junit_capture_requires_passing_sanitized_xml_and_source_commit(tmp_path: Path) -> None:
+    raw = tmp_path / "artifacts" / "unit.xml"
+    raw.parent.mkdir()
+    raw.write_text("""<testsuites><testsuite tests="1" errors="0" failures="0" skipped="0"><testcase /></testsuite></testsuites>""", encoding="utf-8")
+    relative, digest = capture_junit_full_tests_descriptor(tmp_path, junit_path="artifacts/unit.xml", source_commit="a" * 40, captured_at="2026-08-04T00:00:00Z")
+    descriptor = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
+    assert digest == hashlib.sha256((tmp_path / relative).read_bytes()).hexdigest()
+    assert descriptor["source_commit"] == "a" * 40 and descriptor["gate"] == "full-tests"
+    raw.write_text("""<testsuite tests="1" errors="0" failures="1" />""", encoding="utf-8")
+    with pytest.raises(PromotionEvidenceError, match="did not pass"):
+        capture_junit_full_tests_descriptor(tmp_path, junit_path="artifacts/unit.xml", source_commit="a" * 40)
+
+
+def test_descriptor_writer_requires_sanitized_output_and_binds_raw_log(tmp_path: Path) -> None:
+    raw = tmp_path / "raw" / "full-tests.xml"
+    raw.parent.mkdir()
+    raw.write_bytes(b"passed")
+    with pytest.raises(PromotionEvidenceError, match="sanitized attestation"):
+        write_artifact_descriptor(tmp_path, stage="unit-tests", gate="full-tests", raw_log_path="raw/full-tests.xml", command="pytest", captured_at="2026-08-04T00:00:00Z")
+    relative, digest = write_artifact_descriptor(tmp_path, stage="unit-tests", gate="full-tests", raw_log_path="raw/full-tests.xml", command="pytest", captured_at="2026-08-04T00:00:00Z", sanitized=True)
+    payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
+    assert digest == hashlib.sha256((tmp_path / relative).read_bytes()).hexdigest()
+    assert payload["gate"] == "full-tests" and payload["raw_log_sha256"] == hashlib.sha256(raw.read_bytes()).hexdigest()
 
 
 def test_artifact_verifier_binds_descriptor_and_raw_log_content(tmp_path: Path) -> None:

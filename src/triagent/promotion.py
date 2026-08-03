@@ -12,6 +12,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import xml.etree.ElementTree as ET
+import os
+from datetime import UTC, datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -221,6 +224,86 @@ def evaluate(evidence: Mapping[str, Any]) -> PromotionEvaluation:
     # A single record cannot prove that its claimed prior digests resolve to
     # real earlier records. ``evaluate_chain`` is required for cutover.
     return PromotionEvaluation(True, stage, rollout_stage, supplied_digest, (), False)
+
+
+def write_artifact_descriptor(
+    root: Path | str, *, stage: str, gate: str, raw_log_path: str, command: str,
+    captured_at: str | None = None, task_id: str | None = None, profile_digest: str | None = None,
+    source_commit: str | None = None, note: str | None = None, sanitized: bool = False,
+) -> tuple[str, str]:
+    """Atomically bind one reviewed raw log to a promotion gate descriptor.
+
+    This helper never runs a command or inspects a provider. The caller must
+    supply a reviewed, sanitized retained output and explicitly attest it.
+    """
+    base = Path(root).resolve(strict=True)
+    checked_stage = _text(stage, "descriptor stage")
+    checked_gate = _id(gate, "descriptor gate")
+    if checked_stage not in STAGES or checked_gate not in {*SAFETY_GATES, *REPLAY_CASES}:
+        raise PromotionEvidenceError("descriptor has unsupported stage or gate")
+    raw_relative = _artifact_path(raw_log_path, "descriptor raw_log_path")
+    raw_path = (base / raw_relative).resolve()
+    if not raw_path.is_relative_to(base) or raw_path.is_symlink() or not raw_path.is_file():
+        raise PromotionEvidenceError("descriptor raw log path is unsafe or missing")
+    if sanitized is not True:
+        raise PromotionEvidenceError("descriptor requires explicit sanitized attestation")
+    timestamp = captured_at or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not _ISO_UTC.fullmatch(_text(timestamp, "descriptor captured_at", limit=20)):
+        raise PromotionEvidenceError("descriptor captured_at must be UTC second precision")
+    descriptor: dict[str, object] = {
+        "schema_version": 1, "stage": checked_stage, "gate": checked_gate, "passed": True,
+        "exit_code": 0, "raw_log_path": raw_relative,
+        "raw_log_sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+        "sanitized": True, "captured_at": timestamp, "command": _text(command, "descriptor command", limit=512),
+    }
+    for name, value in {"task_id": task_id, "profile_digest": profile_digest, "source_commit": source_commit, "note": note}.items():
+        if value is not None:
+            descriptor[name] = _text(value, f"descriptor {name}", limit=512)
+    relative = f"artifacts/descriptors/{checked_stage}/{checked_gate}.json"
+    target = base / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    payload = canonical_json(descriptor).encode("utf-8") + b"\n"
+    temporary.write_bytes(payload)
+    os.replace(temporary, target)
+    return relative, hashlib.sha256(payload).hexdigest()
+
+
+def capture_junit_full_tests_descriptor(
+    root: Path | str, *, junit_path: str, source_commit: str, captured_at: str | None = None,
+) -> tuple[str, str]:
+    """Capture a reviewed full-regression JUnit result without running tests."""
+    base = Path(root).resolve(strict=True)
+    raw_relative = _artifact_path(junit_path, "junit path")
+    raw_path = (base / raw_relative).resolve()
+    if not raw_path.is_relative_to(base) or raw_path.is_symlink() or not raw_path.is_file():
+        raise PromotionEvidenceError("junit path is unsafe or missing")
+    raw = raw_path.read_bytes()
+    if len(raw) > 2_000_000 or b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
+        raise PromotionEvidenceError("junit input is unsafe")
+    try:
+        document = ET.fromstring(raw)
+    except ET.ParseError as error:
+        raise PromotionEvidenceError("junit input is malformed") from error
+    if document.tag not in {"testsuites", "testsuite"} or document.find(".//system-out") is not None or document.find(".//system-err") is not None or document.find(".//properties") is not None:
+        raise PromotionEvidenceError("junit input contains unsupported output")
+    suites = [node for node in document.iter("testsuite")]
+    if not suites:
+        raise PromotionEvidenceError("junit input has no test suites")
+    def count(attribute: str) -> int:
+        values = [suite.get(attribute, "0") for suite in suites]
+        if not all(value.isdecimal() for value in values):
+            raise PromotionEvidenceError("junit counters are invalid")
+        return sum(int(value) for value in values)
+    if count("tests") < 1 or count("errors") != 0 or count("failures") != 0:
+        raise PromotionEvidenceError("junit full tests did not pass")
+    if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        raise PromotionEvidenceError("junit source_commit must be a full lowercase git SHA")
+    return write_artifact_descriptor(
+        base, stage="unit-tests", gate="full-tests", raw_log_path=raw_relative,
+        command="pytest -q --junitxml=artifacts/unit-tests-current.junit.xml",
+        captured_at=captured_at, source_commit=source_commit, sanitized=True,
+    )
 
 
 def verify_artifacts(evidence: Mapping[str, Any], root: Path | str) -> PromotionEvaluation:
