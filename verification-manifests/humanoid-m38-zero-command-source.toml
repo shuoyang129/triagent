@@ -2,7 +2,7 @@ schema_version = 1
 id = "humanoid-m38-zero-command-source"
 allowed_paths = ["tests", "scripts"]
 artifacts = []
-evidence = [{ label = "unittest-ok", source = "stdout", contains = "OK" }]
+evidence = [{ label = "unittest-ok", source = "stderr", contains = "OK" }]
 [execution]
 argv = ["python3", "-m", "unittest", "-v", "tests.test_m38_adapter_zero_command_source"]
 cwd = "."
