@@ -20,18 +20,18 @@ visualization = ["local-display", "webrtc"]
 background_execution = ["systemd-user", "tmux"]
 
 [agents.codex]
-command = ["/home/ys/works/robots/triagent-v2/scripts/codex-verify-adapter.zsh"]
+command = ["/home/ys/works/robots/triagent/scripts/codex-verify-adapter.zsh"]
 estimated_usd = 1.0
 stream_v2 = true
 
 [agents.cursor]
 enabled = false
-command = ["/home/ys/works/robots/triagent-v2/scripts/cursor-agent-adapter.zsh", "--auto-review", "--sandbox", "enabled", "--model", "auto"]
+command = ["/home/ys/works/robots/triagent/scripts/cursor-agent-adapter.zsh", "--auto-review", "--sandbox", "enabled", "--model", "auto"]
 estimated_usd = 1.0
 stream_v2 = true
 
 [agents.antigravity]
-command = ["/home/ys/works/robots/triagent-v2/scripts/agy-review-adapter.zsh"]
+command = ["/home/ys/works/robots/triagent/scripts/agy-review-adapter.zsh"]
 estimated_usd = 1.0
 stream_v2 = true
 

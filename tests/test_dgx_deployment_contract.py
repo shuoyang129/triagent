@@ -34,12 +34,12 @@ def test_concrete_dgx_profile_uses_verified_paths_and_budgets() -> None:
     assert config["paths"]["workspace"] == "/home/ys/works/robots/projects"
     assert config["paths"]["python"] == "/home/ys/miniforge3/envs/triagent-v2/bin/python"
     assert config["agents"]["codex"]["command"] == [
-        "/home/ys/works/robots/triagent-v2/scripts/codex-verify-adapter.zsh"
+        "/home/ys/works/robots/triagent/scripts/codex-verify-adapter.zsh"
     ]
     assert config["agents"]["codex"]["stream_v2"] is True
     assert config["agents"]["cursor"]["enabled"] is False
     assert config["agents"]["cursor"]["command"] == [
-        "/home/ys/works/robots/triagent-v2/scripts/cursor-agent-adapter.zsh",
+        "/home/ys/works/robots/triagent/scripts/cursor-agent-adapter.zsh",
         "--auto-review",
         "--sandbox",
         "enabled",
@@ -48,7 +48,7 @@ def test_concrete_dgx_profile_uses_verified_paths_and_budgets() -> None:
     ]
     assert config["agents"]["cursor"]["stream_v2"] is True
     assert config["agents"]["antigravity"]["command"] == [
-        "/home/ys/works/robots/triagent-v2/scripts/agy-review-adapter.zsh"
+        "/home/ys/works/robots/triagent/scripts/agy-review-adapter.zsh"
     ]
     assert config["agents"]["antigravity"]["stream_v2"] is True
     assert config["agents"]["deepseek"] == {

@@ -221,12 +221,12 @@ def test_agy_stream_v2_accepts_fenced_json_and_redacts_payload(tmp_path: Path) -
     assert result.data["evidence"] == ["[REDACTED]"]
 
 
-def test_v2_agy_stream_path_never_names_original_wrapper() -> None:
+def test_v2_agy_stream_path_uses_canonical_wrapper() -> None:
     root = Path(__file__).resolve().parents[1]
     original = "/home/ys/works/robots/triagent/scripts/agy-review-adapter.zsh"
     wrapper = root / "scripts" / "agy-review-adapter.zsh"
     source = (root / "src" / "triagent" / "adapters" / "antigravity.py").read_text(encoding="utf-8")
 
     assert wrapper.exists()
-    assert str(wrapper) != original
+    assert str(wrapper) == original
     assert original not in source
