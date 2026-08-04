@@ -37,6 +37,33 @@ corresponding JUnit XML.
 Therefore this is not a complete stage record and cannot advance promotion.
 
 
+## Frozen-original recovery admission (fail-closed)
+
+On `2026-08-04T02:14:28Z`, an isolated clone of original task
+`672cc083-b6ce-4933-9e00-a4a5a37e90cc` was resumed with the frozen original
+TriAgent CLI, its matching normalized profile digest, and explicit live/billing
+authorization. The clone relocated only its source/worktree paths; task goal,
+acceptance criteria, budget, checkpoint, candidate reference, and execution
+provenance were retained. The controller rejected the resume before any new
+provider call because `task_runtime.started_at` plus the immutable 60-minute
+`max_minutes` budget had already elapsed.
+
+A read-only inventory found 219 original `FAILED_RECOVERABLE` tasks and zero
+within their lifetime budget window (latest start `2026-08-02T14:34:11Z`).
+The isolated task retained exactly its three pre-existing completed calls; no
+provider request or new charge was recorded. The original database and selected
+task artifacts remained byte-identical: database
+`fbb6ed82693622b93cd58179d78f4e1adbc7a53d8219cdf66ea272551de546d4`, task
+`a4498c987fb1b661d21531f6ccd78657f6250cbeefd72313f64bacf088b38e75`, handoff
+`ab16d09d55a76eca0f3826bafe3d03f8b8ec0c612139f9349e7c592c1d2f2284`, and
+events `0f433df28be4e5a5825e25eccfdee04a679cd789292e572f67e6271588d7428d`.
+
+This demonstrates a frozen-original fail-closed lifetime-budget condition, not
+original-task resumability. It therefore cannot satisfy
+`original-tasks-readable-and-resumable` or advance promotion. Altering the
+original runtime budget, task timestamps, or provenance would invalidate the
+frozen-baseline requirement and is out of scope.
+
 ## Unmet cutover evidence
 
 The evaluator requires every stage to independently bind all seven safety gates
