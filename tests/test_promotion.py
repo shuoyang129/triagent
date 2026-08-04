@@ -32,6 +32,7 @@ def _evidence(stage: str = "unit-tests", rollout: str = "A", *, accepted: bool =
         "stage": stage,
         "rollout_stage": rollout,
         "generated_at": "2026-08-01T00:00:00Z",
+        "stage_admission": {"id": "stage-admission", "passed": True, "artifact_sha256": _hash("stage-admission"), "artifact_path": f"artifacts/{stage}/stage-admission.json"},
         "gates": [{"id": item, "passed": True, "artifact_sha256": _hash(item), "artifact_path": f"artifacts/{stage}/{item}.json"} for item in SAFETY_GATES],
         "replays": [{"id": item, "passed": True, "artifact_sha256": _hash(item), "artifact_path": f"artifacts/{stage}/{item}.json"} for item in REPLAY_CASES] if index >= 3 else [],
         "prior_stage_digests": [{"stage": item, "digest": _hash(item)} for item in STAGES[:index]],
@@ -166,7 +167,7 @@ def test_descriptor_writer_requires_sanitized_output_and_binds_raw_log(tmp_path:
 
 def test_artifact_verifier_binds_descriptor_and_raw_log_content(tmp_path: Path) -> None:
     record = _evidence()
-    items = [*record["gates"], *record["replays"]]
+    items = [record["stage_admission"], *record["gates"], *record["replays"]]
     for item in items:
         assert isinstance(item, dict)
         identifier = item["id"]

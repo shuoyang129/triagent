@@ -48,6 +48,8 @@ SAFETY_GATES = (
     "original-tasks-readable-and-resumable",
 )
 
+STAGE_ADMISSION = "stage-admission"
+
 REPLAY_CASES = (
     "slow-cursor-version-status-probe",
     "cursor-filesystem-probe-bound",
@@ -195,8 +197,8 @@ def evaluate(evidence: Mapping[str, Any]) -> PromotionEvaluation:
     record = _object(evidence, "promotion evidence")
     _required_keys(
         record,
-        required={"schema_version", "stage", "rollout_stage", "generated_at", "gates", "replays", "prior_stage_digests", "digest"},
-        allowed={"schema_version", "stage", "rollout_stage", "generated_at", "gates", "replays", "prior_stage_digests", "read_only_admission", "operator_acceptance", "digest"},
+        required={"schema_version", "stage", "rollout_stage", "generated_at", "stage_admission", "gates", "replays", "prior_stage_digests", "digest"},
+        allowed={"schema_version", "stage", "rollout_stage", "generated_at", "stage_admission", "gates", "replays", "prior_stage_digests", "read_only_admission", "operator_acceptance", "digest"},
         label="promotion evidence",
     )
     if record["schema_version"] != 1 or isinstance(record["schema_version"], bool):
@@ -210,6 +212,7 @@ def evaluate(evidence: Mapping[str, Any]) -> PromotionEvaluation:
     timestamp = _text(record["generated_at"], "generated_at", limit=20)
     if not _ISO_UTC.fullmatch(timestamp):
         raise PromotionEvidenceError("generated_at must be UTC second precision")
+    _evidence_items([record["stage_admission"]], (STAGE_ADMISSION,), "stage_admission", required=True)
     _evidence_items(record["gates"], SAFETY_GATES, "gates", required=True)
     _evidence_items(record["replays"], REPLAY_CASES, "replays", required=stage in STAGES[3:])
     prior = record["prior_stage_digests"]
@@ -271,7 +274,7 @@ def write_artifact_descriptor(
     base = Path(root).resolve(strict=True)
     checked_stage = _text(stage, "descriptor stage")
     checked_gate = _id(gate, "descriptor gate")
-    if checked_stage not in STAGES or checked_gate not in {*SAFETY_GATES, *REPLAY_CASES}:
+    if checked_stage not in STAGES or checked_gate not in {*SAFETY_GATES, *REPLAY_CASES, STAGE_ADMISSION}:
         raise PromotionEvidenceError("descriptor has unsupported stage or gate")
     raw_relative = _artifact_path(raw_log_path, "descriptor raw_log_path")
     raw_path = (base / raw_relative).resolve()
@@ -380,7 +383,7 @@ def verify_artifacts(evidence: Mapping[str, Any], root: Path | str) -> Promotion
     """Verify retained descriptor and raw-log content for every claimed check."""
     result = evaluate(evidence)
     base = Path(root).resolve(strict=True)
-    items = [*evidence["gates"], *evidence["replays"]]
+    items = [evidence["stage_admission"], *evidence["gates"], *evidence["replays"]]
     for item in items:
         if not isinstance(item, dict):
             raise PromotionEvidenceError("evidence item must be an object")
