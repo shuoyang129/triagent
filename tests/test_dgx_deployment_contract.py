@@ -24,29 +24,33 @@ APPARMOR_PROFILE = ROOT / "deploy" / "apparmor" / "cursor-agent-sandbox"
 def test_concrete_dgx_profile_uses_verified_paths_and_budgets() -> None:
     config = tomllib.loads(PROFILE.read_text(encoding="utf-8"))
     assert config["host"] == {
-        "name": "spark-5643",
+        "name": "spark-5643-v2",
         "platform": "ubuntu-24.04",
         "hardware": "nvidia-dgx-spark",
         "address": "spark",
     }
-    assert config["paths"]["runs"] == "/home/ys/works/robots/triagent-runs"
+    assert config["triagent"] == {"profile_version": 2}
+    assert config["paths"]["runs"] == "/home/ys/works/robots/triagent-runs-v2"
     assert config["paths"]["workspace"] == "/home/ys/works/robots/projects"
-    assert config["paths"]["python"] == "/home/ys/miniforge3/envs/triagent/bin/python"
+    assert config["paths"]["python"] == "/home/ys/miniforge3/envs/triagent-v2/bin/python"
     assert config["agents"]["codex"]["command"] == [
-        "/home/ys/works/robots/triagent/scripts/codex-verify-adapter.zsh"
+        "/home/ys/works/robots/triagent-v2/scripts/codex-verify-adapter.zsh"
     ]
+    assert config["agents"]["codex"]["stream_v2"] is True
     assert config["agents"]["cursor"]["enabled"] is False
     assert config["agents"]["cursor"]["command"] == [
-        "/home/ys/works/robots/triagent/scripts/cursor-agent-adapter.zsh",
+        "/home/ys/works/robots/triagent-v2/scripts/cursor-agent-adapter.zsh",
         "--auto-review",
         "--sandbox",
         "enabled",
         "--model",
         "auto",
     ]
+    assert config["agents"]["cursor"]["stream_v2"] is True
     assert config["agents"]["antigravity"]["command"] == [
-        "/home/ys/works/robots/triagent/scripts/agy-review-adapter.zsh"
+        "/home/ys/works/robots/triagent-v2/scripts/agy-review-adapter.zsh"
     ]
+    assert config["agents"]["antigravity"]["stream_v2"] is True
     assert config["agents"]["deepseek"] == {
         "enabled": True,
         "model": "deepseek/deepseek-v4-flash",
@@ -54,6 +58,7 @@ def test_concrete_dgx_profile_uses_verified_paths_and_budgets() -> None:
         "estimated_usd": 1.0,
         "probe_estimated_usd": 0.25,
         "smoke_timeout_seconds": 180,
+        "stream_v2": True,
     }
     assert config["budget"]["max_agent_calls"] == 20
     assert config["budget"]["max_minutes"] == 60
