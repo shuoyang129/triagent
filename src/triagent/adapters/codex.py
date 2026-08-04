@@ -74,7 +74,14 @@ class CodexAdapter(AgentAdapter):
                     self._env, self._secrets, request.role, stdin=payload,
                     on_event=safe_progress_event_sink(request.task_file.parent / "events.jsonl"),
                 )
-            if output_path is not None and result.status is AgentStatus.INVALID_OUTPUT:
+            # Codex writes ``--output-last-message`` only after it has a final
+            # answer. A bounded stream may subsequently hit its finalization
+            # limit while the CLI is slow to exit. In that case the official
+            # final-message artifact is stronger evidence than the transport
+            # timeout, and consuming it avoids a duplicate provider call on
+            # resume. Do not use this fallback for normal non-read-only
+            # calls: only the read-only path asks Codex for the artifact.
+            if output_path is not None and result.status in {AgentStatus.INVALID_OUTPUT, AgentStatus.TIMED_OUT}:
                 return parse_codex_final_message(output_path, self._secrets, request.role) or result
             return result
         finally:

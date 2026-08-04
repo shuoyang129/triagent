@@ -63,8 +63,8 @@ class _FakeStreamingRunner:
 
 
 class _FinalMessageStreamingRunner(_FakeStreamingRunner):
-    def __init__(self, output: str, final_message: str) -> None:
-        super().__init__(output)
+    def __init__(self, output: str, final_message: str, *, timed_out: bool = False) -> None:
+        super().__init__(output, timed_out=timed_out)
         self.final_message = final_message
 
     def run(self, argv, *args, **kwargs):
@@ -116,6 +116,22 @@ def test_codex_read_only_request_uses_read_only_sandbox(tmp_path: Path) -> None:
 def test_codex_read_only_recovers_valid_final_message_when_jsonl_agent_message_is_invalid(tmp_path: Path) -> None:
     stream = _FinalMessageStreamingRunner(_jsonl({"status": "passed", "evidence": [], "artifacts": []})[:-2] + "not-json\n", '{"status":"passed","evidence":["offline"],"artifacts":[]}')
     result = CodexAdapter(stream_v2=True, stream_runner=stream, command=("codex-offline",)).run(_request(tmp_path).model_copy(update={"read_only": True}))
+    assert result.status is AgentStatus.SUCCEEDED
+    assert result.data["evidence"] == ["offline"]
+    assert not (tmp_path / "codex-final-message.json").exists()
+
+
+def test_codex_read_only_recovers_final_message_after_bounded_finalize_timeout(tmp_path: Path) -> None:
+    stream = _FinalMessageStreamingRunner(
+        _jsonl({"status": "passed", "evidence": [], "artifacts": []}),
+        '{"status":"passed","evidence":["offline"],"artifacts":[]}',
+        timed_out=True,
+    )
+
+    result = CodexAdapter(stream_v2=True, stream_runner=stream, command=("codex-offline",)).run(
+        _request(tmp_path).model_copy(update={"read_only": True})
+    )
+
     assert result.status is AgentStatus.SUCCEEDED
     assert result.data["evidence"] == ["offline"]
     assert not (tmp_path / "codex-final-message.json").exists()
