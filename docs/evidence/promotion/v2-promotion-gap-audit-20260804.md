@@ -7,7 +7,7 @@ cutover or replace any missing gate artifact.
 
 | Stage | Retained evidence | Status |
 | --- | --- | --- |
-| unit-tests | `docs/evidence/promotion/artifacts/descriptors/unit-tests/full-tests.json` SHA-256 `f294c68fb3490406079f26750debe1bc1a065466a4d4b612897173b657643e75` (binds JUnit SHA-256 `c83be4770ab506322eb67dd2f31e4082ee1e7a80a1014a642e099c8db17ee87d`) | Fixed commit `b1a32cc96158dcd0c029940a789addac6136637f`: 447 passed, 9 skipped; only the full-tests gate is captured |
+| unit-tests | `docs/evidence/promotion/artifacts/descriptors/unit-tests/full-tests.json` SHA-256 `f294c68fb3490406079f26750debe1bc1a065466a4d4b612897173b657643e75` (binds JUnit SHA-256 `c83be4770ab506322eb67dd2f31e4082ee1e7a80a1014a642e099c8db17ee87d`) | Fixed commit `b1a32cc96158dcd0c029940a789addac6136637f`: 447 passed, 9 skipped; all seven gate descriptors are retained; `records/unit-tests.json` content digest `8a66ea1216c94f107d91895843b92dca8d40c5b0002e971f08f511ddb081841a` verifies locally, with cutover false |
 | adapter-contracts | `docs/evidence/promotion/artifacts/adapter-contracts-20260804.log` SHA-256 `b2e47f893ea31111460c0112ceeb9669e4f4e2ac9e4af751a4184b390a0e53c4` | Fresh contract regression retained; per-gate descriptors still required |
 | fake-three-stage-workflow | task `c0849048-a9ae-4a25-90fd-b0f22b886540` report/event hashes recorded in `v2-staged-gates-20260802.md` | Retained |
 | historical-replay | `docs/evidence/runtime/v2-historical-replay.json` | 12 replay cases retained |
@@ -32,9 +32,9 @@ corresponding JUnit XML.
 | no-duplicate-provider-call-after-recovery | `bff731e691b0dd4ab3312d0dca29985a5f4cfd323564d4fcb04f43f71c61891c` | 4 fixed durable-recovery contracts passed |
 | no-candidate-misattribution | `8bcba5685055985e320f37235bfb475493eb31962ab852bfda9182a924f22935` | 3 fixed candidate-binding contracts passed |
 | legacy-fallback | `aeab121341d73b143be2496806a09264015122ada546ee20a14b5818b099a8d0` | fixed commit `b1a32cc96158dcd0c029940a789addac6136637f`, 7 legacy-boundary contracts passed |
+| original-tasks-readable-and-resumable | `730712bff59c3bdfc9fa7ed1e4ee5f048ab633dbb797439e98d18ff656bed4a8` | accepted frozen-baseline lifetime-budget exception; binds frozen-original snapshot |
 
-`original-tasks-readable-and-resumable` remains absent. The legacy-fallback capture proves only the v2 isolation and compatibility contract; it does not prove an original historical task can resume without an isolated runtime exercise.
-Therefore this is not a complete stage record and cannot advance promotion.
+`original-tasks-readable-and-resumable` is bound to the independent frozen-original snapshot under the single accepted lifetime-budget exception. The legacy-fallback capture still proves only v2 isolation and compatibility. `records/unit-tests.json` now verifies the complete unit-tests stage locally; all later stage records remain required.
 
 
 ## Frozen-original recovery admission (fail-closed)
@@ -74,7 +74,7 @@ explicit operator acceptance mandated by the plan.
 
 The evaluator requires every stage to independently bind all seven safety gates
 to reviewed artifacts. The retained Markdown and reports do not yet provide that
-per-gate binding for all stages. No JSON promotion chain was generated.
+per-gate binding for all stages. Only the verified `unit-tests` stage record exists; a complete ordered promotion chain was not generated.
 
 The next safe action is a fresh, per-stage capture process that emits one
 artifact for each gate, then creates content-linked records and evaluates the
