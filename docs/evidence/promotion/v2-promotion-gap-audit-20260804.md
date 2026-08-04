@@ -8,7 +8,7 @@ cutover or replace any missing gate artifact.
 | Stage | Retained evidence | Status |
 | --- | --- | --- |
 | unit-tests | `docs/evidence/promotion/artifacts/descriptors/unit-tests/full-tests.json` SHA-256 `f294c68fb3490406079f26750debe1bc1a065466a4d4b612897173b657643e75` (binds JUnit SHA-256 `c83be4770ab506322eb67dd2f31e4082ee1e7a80a1014a642e099c8db17ee87d`) | Fixed commit `b1a32cc96158dcd0c029940a789addac6136637f`: 447 passed, 9 skipped; all seven gate descriptors are retained; `records/unit-tests.json` content digest `786d599f4632b0e97d495469fcb5b3ceb5c240d62ed5e8869993a09fdb9e29bb` verifies locally, with cutover false |
-| adapter-contracts | `docs/evidence/promotion/artifacts/adapter-contracts-20260804.log` SHA-256 `b2e47f893ea31111460c0112ceeb9669e4f4e2ac9e4af751a4184b390a0e53c4` | Fresh contract regression retained; per-gate descriptors still required |
+| adapter-contracts | `docs/evidence/promotion/artifacts/adapter-contracts-20260804.log` SHA-256 `b2e47f893ea31111460c0112ceeb9669e4f4e2ac9e4af751a4184b390a0e53c4` | 92-pass adapter admission plus seven global gate descriptors; `records/adapter-contracts.json` content digest `5ded335c728baa67369568495d259fa9aa802e966b38628673d59b067fc64086` verifies locally, with cutover false |
 | fake-three-stage-workflow | task `c0849048-a9ae-4a25-90fd-b0f22b886540` report/event hashes recorded in `v2-staged-gates-20260802.md` | Retained |
 | historical-replay | `docs/evidence/runtime/v2-historical-replay.json` | 12 replay cases retained |
 | isolated-no-provider-synthetic | task `ecc3cdb0-6ec2-4ed9-9150-c0fda461c8ca` | Retained |

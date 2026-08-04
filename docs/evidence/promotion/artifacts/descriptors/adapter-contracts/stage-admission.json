@@ -1,0 +1,1 @@
+{"captured_at":"2026-08-04T05:42:53Z","command":"pytest adapter-contracts","exit_code":0,"gate":"stage-admission","note":"92-passed-4-skipped-adapter-contracts","passed":true,"raw_log_path":"artifacts/adapter-contracts-20260804.log","raw_log_sha256":"b2e47f893ea31111460c0112ceeb9669e4f4e2ac9e4af751a4184b390a0e53c4","sanitized":true,"schema_version":1,"stage":"adapter-contracts"}
