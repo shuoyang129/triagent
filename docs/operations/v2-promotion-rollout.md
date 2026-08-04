@@ -1,8 +1,6 @@
 # TriAgent v2 promotion and rollout runbook
 
-This runbook is for the isolated `triagent-v2` controller.  Before accepted
-cutover, the public `triagent`, its environment, profiles, wrappers, and
-`/home/ys/works/robots/triagent-runs` remain untouched.
+This runbook records the v2 promotion process.  On 2026-08-04 the operator accepted the verified nine-stage chain and the public `triagent` name was switched directly to v2.  The original controller and `/home/ys/works/robots/triagent-runs` remain frozen archival material and are not a public route.
 
 ## Evidence and gate rules
 
@@ -65,16 +63,10 @@ and v2 tasks stay with v2 for audit and recovery.
 
 ## Cutover hold point
 
-No code path in the evaluator or this runbook may repoint public `triagent`.
-Even a final-stage, rollout-D evidence chain is not cutover eligible until it
-contains a separately recorded `operator_acceptance` object with exactly:
+The evaluator itself never repoints the public command.  The accepted final record contains the separately recorded `operator_acceptance` object:
 
 ```json
 {"action":"cutover","outcome":"accepted","operator":"named-operator","accepted_at":"2026-08-01T00:00:00Z"}
 ```
 
-The named operator must explicitly accept the reviewed outcome after all gates
-pass.  Only then may a separately reviewed, atomic cutover procedure be
-considered.  That later procedure must route old task roots to the frozen
-original runtime, route v2 roots to v2, preserve the v2-owned AGY wrapper, and
-have a tested atomic restoration of the original public entry point.
+The named operator accepted the reviewed outcome after all gates passed.  The public name is an atomic `~/.local/bin/triagent` link to v2; removing that added link restores the prior no-public-command state.  The frozen original runtime and its data root were neither repointed nor modified.

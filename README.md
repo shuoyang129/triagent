@@ -1,127 +1,68 @@
-# TriAgent
+# TriAgent v2
 
-TriAgent is an approval-gated local orchestrator for a three-provider coding
-workflow:
+TriAgent v2 is the active public controller.  The public `triagent` command
+resolves to the v2 runtime and uses the v2 task root
+`/home/ys/works/robots/triagent-runs-v2`.
 
-1. Cursor implements the requested change.
-2. Codex independently verifies the candidate and test evidence.
-3. Google Antigravity performs an independent review.
+The earlier controller and its task root are frozen archival material.  They
+are not a public entry point, are not migrated, and must not be modified.
 
-The controller records immutable task provenance, provider-call budgets,
-sanitized failure diagnostics, candidate commits, and explicit operator
-approvals. A provider failure does not silently switch an existing task to a
-different profile or implementation route.
-
-## Requirements
-
-- Python 3.12 or newer
-- Git
-- Authenticated provider CLIs for real runs
-- Linux or Windows; the repository also contains a verified DGX Spark profile
-
-## Install and test
-
-```bash
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -e '.[test]'
-.venv/bin/python -m pytest -q
-.venv/bin/triagent --help
-```
-
-DGX Spark operators can use the idempotent installers and detailed checklist
-in [`docs/operations/dgx-bootstrap.md`](docs/operations/dgx-bootstrap.md):
-
-```bash
-bash scripts/bootstrap-dgx.sh
-bash scripts/install-triagent-dgx.sh --check
-bash scripts/install-triagent-dgx.sh --apply
-bash scripts/install-cursor-sandbox-apparmor.sh --check
-sudo -v
-bash scripts/install-cursor-sandbox-apparmor.sh --apply
-```
-
-The AppArmor installer grants `userns` only to Cursor's `cursorsandbox`
-binary. It retains the global unprivileged-userns restriction.
-
-## Run a task
-
-Use the fake profile first when validating a new workflow:
-
-```bash
-triagent doctor --profile fake
-triagent run \
-  --profile fake \
-  --risk low \
-  --acceptance "tests pass" \
-  --visual-check none \
-  /absolute/path/to/repository \
-  "Implement the requested change"
-```
-
-A real profile always requires explicit live and billing confirmation:
-
-```bash
-triagent doctor --profile profiles/dgx.spark.toml
-triagent run \
-  --profile profiles/dgx.spark.toml \
-  --live-confirmed \
-  --billing-confirmed \
-  --risk low \
-  --acceptance "python -m pytest -q passes" \
-  --forbidden .env \
-  --visual-check none \
-  /absolute/path/to/repository \
-  "Implement the requested change"
-```
-
-Inspect and continue a task using the same profile that created it:
-
-```bash
-triagent status TASK_ID
-triagent report TASK_ID
-triagent resume --profile profiles/dgx.spark.toml \
-  --live-confirmed --billing-confirmed TASK_ID
-triagent approve TASK_ID outcome
-triagent approve TASK_ID merge
-```
-
-Approval records an operator decision; it does not itself merge, deploy, or
-perform a destructive operation.
-
-## DGX provider policy
+## Default provider route
 
 The normal DGX profile is [`profiles/dgx.spark.toml`](profiles/dgx.spark.toml).
-It uses Cursor Composer 2.5 Fast with Auto-review and sandboxing enabled, then
-the repository-owned Codex verifier and Antigravity reviewer adapters.
-Provider calls default to a 900-second timeout; operators may set
-`TRIAGENT_AGENT_TIMEOUT_SECONDS` from 60 through 3600 seconds. Cursor's
-filesystem capability probe remains independently bounded at 30 seconds.
+It uses DeepSeek through the restricted OpenCode implementer, then Codex
+verification and independent Antigravity review.  Cursor remains a configurable
+provider, but is disabled in the default v2 profile.
 
-The optional DeepSeek fallback runs through OpenCode and defaults to `deepseek/deepseek-v4-pro`; it is not a Cursor custom model. It reads `DEEPSEEK_API_KEY` only from the environment and injects it through an OpenCode `{env:DEEPSEEK_API_KEY}` provider reference. The TriAgent-specific OpenCode agent denies shell, network, subagents, skills, external directories, `.env`, and `.git`, while allowing repository-local read, search, and edit tools. `--pure` disables external plugins and the final response is parsed from OpenCode's JSON event stream. The checked-in profiles keep DeepSeek disabled; enabling it requires explicit live and billing confirmation plus positive `estimated_usd` and `probe_estimated_usd` values. Readiness failures are reduced to allowlisted diagnostic codes; provider response text is never persisted.
+OpenCode is run with the v2 boundary: no shell, network, subagents, skills,
+external directories, `.env`, or `.git` access.  Provider output is parsed as
+structured data and sensitive content is not retained in task reports.
 
-[`profiles/dgx.spark.synthetic-force.toml`](profiles/dgx.spark.synthetic-force.toml)
-is a deliberately narrow exception. It passes Cursor `--force`, which
-overrides repository safety policy, and its adapter rejects work unless both
-conditions hold:
+## Normal operation
 
-- source scopes resolve below `/home/ys/works/robots/synthetic-projects`;
-- task worktrees resolve below
-  `/home/ys/works/robots/triagent-synthetic-runs/runs`.
+```sh
+triagent --version
+triagent doctor --profile /home/ys/works/robots/triagent-v2/profiles/dgx.spark.toml
 
-Never make the force profile the default and never use it for a robot or
-production repository.
+# No provider call; controller and workflow validation only.
+triagent run REPOSITORY "Goal" \
+  --profile fake --risk low --acceptance "tests pass" --visual-check none
 
-## Verification status
+# A paid run requires both confirmations and an explicit v2 profile.
+triagent run REPOSITORY "Goal" \
+  --profile /home/ys/works/robots/triagent-v2/profiles/dgx.spark.toml \
+  --live-confirmed --billing-confirmed \
+  --risk low --acceptance "tests pass" --forbidden secrets/ --visual-check none
 
-On 2026-07-22 the DGX route completed a real paid Cursor, Codex, and Antigravity synthetic test. On 2026-07-23 the earlier native DeepSeek implementation, Codex verification, and Antigravity review route also passed and reached the approval gate. On 2026-07-25 the OpenCode-backed `deepseek/deepseek-v4-pro` implementation, Codex verification, and Antigravity review route completed a real paid synthetic test and reached `APPROVAL`; Antigravity succeeded on its single permitted retry.
+triagent status TASK_ID --data-root /home/ys/works/robots/triagent-runs-v2
+triagent report TASK_ID --data-root /home/ys/works/robots/triagent-runs-v2
+```
 
-Real calls consume provider quota or incur charges. TriAgent's estimated-cost
-ledger is conservative accounting, not a provider invoice.
+Do not approve an outcome, merge, deployment, paid action, or destructive
+operation without an explicit operator decision.  Task edits occur only in
+isolated worktrees; no task directly edits its source checkout.
 
-## Codex skill
+## Streaming and recovery
 
-The operator skill is maintained in [`skills/triagent`](skills/triagent).
-Install that directory as `~/.codex/skills/triagent` and restart/reload Codex
-after updates. The skill requires all vendor calls to go through the TriAgent
-CLI and preserves the same paid-call, profile-provenance, approval, AppArmor,
-and synthetic-force boundaries described above.
+v2 records two different signals:
+
+- liveness: the wrapper process is still alive;
+- meaningful progress: provider output, a new event, a test-stage change, or a
+  candidate-state change.
+
+Only meaningful progress refreshes the idle timeout.  A terminal result written
+by Codex's official final-message channel is recovered even if the CLI exits
+after the bounded finalization interval, preventing a duplicate paid call.
+
+## Promotion and rollback
+
+The accepted nine-stage promotion chain is retained under
+[`docs/evidence/promotion`](docs/evidence/promotion).  Public cutover is a
+symlink at `/home/ys/.local/bin/triagent` to the installed v2 command; removal
+of that symlink is the rollback for the public name.  It does not modify the
+frozen original runtime or either task database.
+
+For a robot-safety repository, first use the explicit `triagent inspect`
+read-only route.  It requires both live/billing confirmations and must never
+create a candidate, source edit, service, simulation, network-control, or
+physical action.

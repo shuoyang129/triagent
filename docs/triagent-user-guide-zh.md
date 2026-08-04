@@ -1,5 +1,7 @@
 # TriAgent 中文使用手册
 
+> **状态（2026-08-04）：本文主体是冻结 v1 的历史操作手册，不能按其中的 Cursor 默认、Windows 路径或原版 profile 执行。当前公共 `triagent` 已切换至 v2；请使用仓库根目录 `README.md` 中的 v2 命令与 `profiles/dgx.spark.toml`。**
+
 > 适用对象：希望主要在 ChatGPT/Codex App 中用自然语言下达任务、不希望经常阅读代码的使用者。
 > 当前版本：2026-07-14。项目目录统一为 `D:\workspace`。
 
