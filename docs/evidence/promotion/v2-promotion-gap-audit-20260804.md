@@ -59,10 +59,16 @@ task artifacts remained byte-identical: database
 events `0f433df28be4e5a5825e25eccfdee04a679cd789292e572f67e6271588d7428d`.
 
 This demonstrates a frozen-original fail-closed lifetime-budget condition, not
-original-task resumability. It therefore cannot satisfy
-`original-tasks-readable-and-resumable` or advance promotion. Altering the
-original runtime budget, task timestamps, or provenance would invalidate the
-frozen-baseline requirement and is out of scope.
+original-task resumability. On `2026-08-04T02:38:12Z`, the operator accepted
+this exact condition as the single `original-tasks-readable-and-resumable`
+frozen-baseline exception. The acceptance is bound to the database, task,
+handoff, and event hashes above; it does not authorize changing the original
+runtime budget, task timestamps, provenance, profile, code, or tests.
+
+This exception is not a cutover acceptance and cannot by itself advance any
+stage. Every other gate and every stage still requires independent retained
+evidence, and the final public-entry-point cutover still requires the separate
+explicit operator acceptance mandated by the plan.
 
 ## Unmet cutover evidence
 
