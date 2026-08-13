@@ -2,6 +2,8 @@
 
 # TriAgent
 
+![TriAgent social preview](assets/social-preview.png)
+
 **Approval-gated multi-agent software delivery with isolated execution, independent verification, and auditable evidence.**
 
 让实现、验证和审查由不同智能体分工完成，并把关键决策留给人类操作员。
